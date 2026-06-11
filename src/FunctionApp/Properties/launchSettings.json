@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "ESP.DocumentExtractor.FunctionApp": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 7090"
+    }
+  }
+}

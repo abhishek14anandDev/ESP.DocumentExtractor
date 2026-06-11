@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>ESP.DocumentExtractor.Domain</RootNamespace>
+  </PropertyGroup>
+</Project>
