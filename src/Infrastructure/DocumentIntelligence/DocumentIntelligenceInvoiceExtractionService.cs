@@ -1,5 +1,6 @@
 using Azure;
 using Azure.AI.DocumentIntelligence;
+using ESP.DocumentExtractor.Application.Interfaces;
 using ESP.DocumentExtractor.Domain.Enums;
 using ESP.DocumentExtractor.Domain.Models;
 using ESP.DocumentExtractor.Domain.ResultPattern;

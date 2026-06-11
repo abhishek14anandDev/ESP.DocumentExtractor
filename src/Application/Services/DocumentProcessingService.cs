@@ -48,7 +48,7 @@ public sealed class DocumentProcessingService(
         var downloadedDocument = downloadResult.Value;
         var document = new Domain.Models.BlobDocument
         {
-            BlobName = downloadedDocument.BlobName,
+            BlobName = downloadedDocument.BlobName, 
             ContainerName = downloadedDocument.ContainerName,
             ContentType = downloadedDocument.ContentType,
             Content = downloadedDocument.Content,
