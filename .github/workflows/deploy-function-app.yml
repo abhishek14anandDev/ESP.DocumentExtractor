@@ -4,12 +4,6 @@ on:
   push:
     branches:
       - main
-    paths:
-      - ".github/workflows/deploy-function-app.yml"
-      - "global.json"
-      - "ESP.DocumentExtractor.sln"
-      - "src/**"
-      - "tests/**"
   workflow_dispatch:
 
 permissions:
