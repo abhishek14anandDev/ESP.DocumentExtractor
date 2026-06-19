@@ -1,0 +1,54 @@
+name: Deploy Azure Function App
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/deploy-function-app.yml"
+      - "global.json"
+      - "ESP.DocumentExtractor.sln"
+      - "src/**"
+      - "tests/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_VERSION: 10.0.x
+  SOLUTION_PATH: ESP.DocumentExtractor.sln
+  FUNCTION_PROJECT_PATH: src/FunctionApp/ESP.DocumentExtractor.FunctionApp.csproj
+  PUBLISH_OUTPUT_PATH: published-function-app
+
+jobs:
+  build-test-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore $SOLUTION_PATH
+
+      - name: Build
+        run: dotnet build $SOLUTION_PATH --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test $SOLUTION_PATH --configuration Release --no-build --verbosity normal
+
+      - name: Publish Function App
+        run: dotnet publish $FUNCTION_PROJECT_PATH --configuration Release --no-build --output $PUBLISH_OUTPUT_PATH
+
+      - name: Deploy to Azure Functions
+        uses: Azure/functions-action@v1
+        with:
+          app-name: espdataextractor
+          package: ${{ env.PUBLISH_OUTPUT_PATH }}
+          publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE_ESPDATAEXTRACTOR }}
