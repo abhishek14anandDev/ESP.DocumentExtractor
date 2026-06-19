@@ -28,7 +28,7 @@ public sealed class DocumentIngestionFunction(
             return new BadRequestObjectResult("Request body contains invalid JSON.");
         }
 
-        if (documentRequest is null) 
+        if (documentRequest is null)
         {
             return new BadRequestObjectResult("Request body is required.");
         }
