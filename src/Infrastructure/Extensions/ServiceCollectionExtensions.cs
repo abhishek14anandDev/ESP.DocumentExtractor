@@ -25,6 +25,7 @@ public static class ServiceCollectionExtensions
         services.Configure<AzureOpenAiOptions>(configuration.GetSection("AzureOpenAi"));
         services.Configure<DocumentIntelligenceOptions>(configuration.GetSection("DocumentIntelligence"));
         services.Configure<RetryOptions>(configuration.GetSection("Retry"));
+        services.Configure<CadConversionOptions>(configuration.GetSection("CadConversion"));
 
         services.AddSingleton(sp =>
         {
@@ -40,6 +41,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDocumentProcessorFactory, DocumentProcessorFactory>();
         services.AddScoped<IInvoiceExtractionValidator, InvoiceExtractionValidator>();
         services.AddScoped<IDocumentProcessingService, DocumentProcessingService>();
+        services.AddScoped<ICadGeoJsonService, Ogr2OgrCadGeoJsonService>();
         services.AddScoped<IBlobService, BlobService>();
         services.AddHttpClient<AzureOpenAiInvoiceExtractionService>((serviceProvider, client) =>
         {
