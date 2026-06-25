@@ -1,0 +1,9 @@
+.git*
+.venv
+__pycache__
+.vscode
+local.settings.json
+tests
+*.dxf
+*.dwg
+sample_output

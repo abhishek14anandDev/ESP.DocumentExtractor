@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DWG Network on Google Maps (deck.gl)</title>
+  <style>
+    :root { --panel-bg: rgba(20, 22, 28, 0.92); --fg: #e8eaed; --accent: #4f8cff; }
+    html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    #map { position: absolute; inset: 0; }
+    #panel {
+      position: absolute; top: 12px; left: 12px; z-index: 5; width: 300px;
+      background: var(--panel-bg); color: var(--fg); border-radius: 10px;
+      padding: 14px 16px; box-shadow: 0 6px 24px rgba(0,0,0,.35); backdrop-filter: blur(6px);
+    }
+    #panel h1 { font-size: 15px; margin: 0 0 10px; font-weight: 600; }
+    #panel label { display: block; font-size: 12px; margin: 10px 0 4px; opacity: .85; }
+    #panel input[type=file] { width: 100%; font-size: 12px; color: var(--fg); }
+    #panel input[type=range] { width: 100%; }
+    .row { display: flex; gap: 8px; align-items: center; }
+    .stat { font-size: 12px; opacity: .8; margin-top: 8px; line-height: 1.5; }
+    .hint { font-size: 11px; opacity: .6; margin-top: 6px; }
+    #legend { margin-top: 10px; max-height: 180px; overflow:auto; font-size: 11px; }
+    #legend div { display:flex; align-items:center; gap:6px; margin:2px 0; }
+    .sw { width: 12px; height: 12px; border-radius: 2px; flex: 0 0 auto; }
+    #tooltip {
+      position: absolute; z-index: 6; pointer-events: none; display: none;
+      background: rgba(0,0,0,.85); color: #fff; padding: 6px 8px; border-radius: 6px;
+      font-size: 12px; max-width: 280px;
+    }
+    .warn { color: #ffd27a; font-size: 11px; margin-top: 8px; }
+    button { background: var(--accent); color: #fff; border: 0; border-radius: 6px;
+      padding: 6px 10px; font-size: 12px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="tooltip"></div>
+  <div id="panel">
+    <h1>DWG &rarr; Google Maps</h1>
+    <label>Load WGS84 GeoJSON file</label>
+    <input id="file" type="file" accept=".geojson,.json,application/geo+json" />
+    <div class="hint">Use a file produced with <code>--wgs84 --filter</code> (lon/lat).</div>
+
+    <label>Line width: <span id="lwVal">2</span> px</label>
+    <input id="lineWidth" type="range" min="0.5" max="8" step="0.5" value="2" />
+
+    <label>Point radius: <span id="prVal">3</span> px</label>
+    <input id="pointRadius" type="range" min="1" max="12" step="1" value="3" />
+
+    <label>Opacity: <span id="opVal">0.9</span></label>
+    <input id="opacity" type="range" min="0.1" max="1" step="0.1" value="0.9" />
+
+    <div class="row" style="margin-top:10px">
+      <button id="fit">Fit to data</button>
+    </div>
+
+    <div class="stat" id="stat">No data loaded.</div>
+    <div id="legend"></div>
+    <div class="warn" id="keyWarn" style="display:none">
+      Set your Google Maps API key in viewer.html (GOOGLE_MAPS_API_KEY).
+    </div>
+  </div>
+
+  <script>
+    // 1) Google Maps JavaScript API key.
+    const GOOGLE_MAPS_API_KEY = "AIzaSyBtD1yqa9lmq1zaDZ3ZG2adB-Dh-5YBeso";
+    // 2) Optional: auto-load a GeoJSON from a URL/relative path (served over http).
+    //    Works when the page is served via http (see README). Over file:// the
+    //    browser blocks this fetch, so use the file picker instead.
+    const AUTO_LOAD_URL = "sample_output/network.wgs84.geojson";
+
+    let map, overlay, geojsonData = null;
+    const layerColors = {};
+
+    function colorForLayer(name) {
+      if (layerColors[name]) return layerColors[name];
+      let h = 0;
+      for (let i = 0; i < (name || "").length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+      const hue = h % 360;
+      const rgb = hslToRgb(hue / 360, 0.65, 0.55);
+      layerColors[name] = rgb;
+      return rgb;
+    }
+    function hslToRgb(h, s, l) {
+      let r, g, b;
+      if (s === 0) { r = g = b = l; }
+      else {
+        const hue2rgb = (p, q, t) => {
+          if (t < 0) t += 1; if (t > 1) t -= 1;
+          if (t < 1/6) return p + (q - p) * 6 * t;
+          if (t < 1/2) return q;
+          if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+          return p;
+        };
+        const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+        const p = 2 * l - q;
+        r = hue2rgb(p, q, h + 1/3); g = hue2rgb(p, q, h); b = hue2rgb(p, q, h - 1/3);
+      }
+      return [Math.round(r*255), Math.round(g*255), Math.round(b*255)];
+    }
+
+    function initMap() {
+      map = new google.maps.Map(document.getElementById("map"), {
+        center: { lat: 52.049, lng: -0.712 },
+        zoom: 13,
+        mapTypeId: "hybrid",
+        tilt: 0,
+      });
+      overlay = new deck.GoogleMapsOverlay({ layers: [] });
+      overlay.setMap(map);
+      if (AUTO_LOAD_URL) loadUrl(AUTO_LOAD_URL);
+    }
+    window.initMap = initMap;
+
+    function buildLayers() {
+      if (!geojsonData) return [];
+      const lw = parseFloat(document.getElementById("lineWidth").value);
+      const pr = parseFloat(document.getElementById("pointRadius").value);
+      const op = parseFloat(document.getElementById("opacity").value);
+      const a = Math.round(op * 255);
+      return [
+        new deck.GeoJsonLayer({
+          id: "dwg-network",
+          data: geojsonData,
+          pickable: true,
+          stroked: true,
+          filled: true,
+          pointType: "circle",
+          getLineColor: f => [...colorForLayer(f.properties?.layer), a],
+          getFillColor: f => [...colorForLayer(f.properties?.layer), Math.round(a * 0.5)],
+          getLineWidth: lw,
+          lineWidthUnits: "pixels",
+          getPointRadius: pr,
+          pointRadiusUnits: "pixels",
+          updateTriggers: {
+            getLineWidth: lw, getPointRadius: pr,
+            getLineColor: op, getFillColor: op,
+          },
+        }),
+      ];
+    }
+
+    function refresh() { overlay.setProps({ layers: buildLayers() }); }
+
+    function setData(data) {
+      geojsonData = data;
+      const feats = data.features || [];
+      const counts = {};
+      for (const f of feats) {
+        const l = f.properties?.layer || "(none)";
+        counts[l] = (counts[l] || 0) + 1;
+      }
+      document.getElementById("stat").textContent =
+        `${feats.length.toLocaleString()} features, ${Object.keys(counts).length} layers`;
+      const legend = document.getElementById("legend");
+      legend.innerHTML = "";
+      Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0, 20).forEach(([l, c]) => {
+        const [r,g,b] = colorForLayer(l);
+        const row = document.createElement("div");
+        row.innerHTML = `<span class="sw" style="background:rgb(${r},${g},${b})"></span>`
+          + `<span>${l} (${c})</span>`;
+        legend.appendChild(row);
+      });
+      refresh();
+      fitToData();
+    }
+
+    function fitToData() {
+      if (!geojsonData) return;
+      const b = new google.maps.LatLngBounds();
+      let n = 0;
+      const visit = c => {
+        if (Array.isArray(c) && typeof c[0] === "number") { b.extend({ lng: c[0], lat: c[1] }); n++; }
+        else if (Array.isArray(c)) c.forEach(visit);
+      };
+      for (const f of geojsonData.features) if (f.geometry) visit(f.geometry.coordinates);
+      if (n) map.fitBounds(b);
+    }
+
+    async function loadUrl(url) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(res.status + " " + res.statusText);
+        setData(await res.json());
+      } catch (e) {
+        document.getElementById("stat").textContent = "Failed to load: " + e.message;
+      }
+    }
+
+    document.getElementById("file").addEventListener("change", ev => {
+      const file = ev.target.files[0];
+      if (!file) return;
+      document.getElementById("stat").textContent = "Reading " + file.name + " ...";
+      const reader = new FileReader();
+      reader.onload = () => { try { setData(JSON.parse(reader.result)); }
+        catch (e) { document.getElementById("stat").textContent = "Invalid JSON: " + e.message; } };
+      reader.readAsText(file);
+    });
+    ["lineWidth","pointRadius","opacity"].forEach(id => {
+      const el = document.getElementById(id);
+      const out = { lineWidth: "lwVal", pointRadius: "prVal", opacity: "opVal" }[id];
+      el.addEventListener("input", () => { document.getElementById(out).textContent = el.value; refresh(); });
+    });
+    document.getElementById("fit").addEventListener("click", fitToData);
+
+    // Hover tooltip
+    function attachTooltip() {
+      const tip = document.getElementById("tooltip");
+      overlay.setProps({
+        getTooltip: null,
+        onHover: info => {
+          if (info && info.object) {
+            const p = info.object.properties || {};
+            tip.style.display = "block";
+            tip.style.left = info.x + 14 + "px";
+            tip.style.top = info.y + 14 + "px";
+            const ll = info.coordinate
+              ? `${info.coordinate[1].toFixed(6)}, ${info.coordinate[0].toFixed(6)}`
+              : "-";
+            tip.innerHTML = `<b>${p.entityType || "?"}</b>`
+              + `<br>lat, lng: ${ll}`
+              + `<br>layer: ${p.layer ?? "-"}`
+              + (p.text ? `<br>text: ${p.text}` : "")
+              + (p.handle ? `<br>handle: ${p.handle}` : "");
+          } else { tip.style.display = "none"; }
+        },
+      });
+    }
+
+    function boot() {
+      if (GOOGLE_MAPS_API_KEY === "YOUR_GOOGLE_MAPS_API_KEY") {
+        document.getElementById("keyWarn").style.display = "block";
+      }
+      const s = document.createElement("script");
+      s.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&callback=initMap&v=weekly`;
+      s.async = true;
+      s.onload = () => setTimeout(attachTooltip, 500);
+      document.head.appendChild(s);
+    }
+
+    // Load deck.gl, then Google Maps.
+    (function () {
+      const d = document.createElement("script");
+      d.src = "https://unpkg.com/deck.gl@9.0.0/dist.min.js";
+      d.onload = boot;
+      document.head.appendChild(d);
+    })();
+  </script>
+</body>
+</html>
