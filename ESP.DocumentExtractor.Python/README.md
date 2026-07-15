@@ -190,6 +190,37 @@ WHERE c.documentType = "conversionMetadata"
   AND c.source.fileName = "drawing.dwg"
 ```
 
+### Read persisted GeoJSON
+
+Use the Cosmos conversion id returned by `x-cosmos-conversion-id` after a
+successful POST:
+
+```bash
+curl http://localhost:7071/api/cad/geojson/<conversion-id> -o stored.json
+```
+
+Default response:
+
+```json
+{
+  "conversionId": "<conversion-id>",
+  "metadata": { "...": "conversion metadata from Cosmos" },
+  "geojson": {
+    "type": "FeatureCollection",
+    "features": []
+  }
+}
+```
+
+To return only the reconstructed GeoJSON FeatureCollection:
+
+```bash
+curl "http://localhost:7071/api/cad/geojson/<conversion-id>?format=geojson" -o output.geojson
+```
+
+Read response headers include `x-correlation-id`, `x-cosmos-conversion-id`,
+`x-cosmos-container`, `x-cosmos-chunk-count`, and `x-conversion-feature-count`.
+
 ## Deployment notes
 
 The Azure Functions Linux Python host does **not** include LibreDWG. To process
@@ -219,6 +250,7 @@ ESP.DocumentExtractor.Python/
 |-- dwg_geojson/
 |   |-- converter.py             # DWG/DXF to GeoJSON conversion
 |   |-- storage_service.py       # metadata/chunk persistence service
+|   |-- retrieval_service.py     # metadata/chunk read and reconstruction service
 |   |-- storage_models.py        # persistence domain models
 |   |-- repository.py            # persistence repository port
 |   `-- cosmos_repository.py     # Cosmos DB repository adapter

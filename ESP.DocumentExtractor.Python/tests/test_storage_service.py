@@ -6,7 +6,8 @@ import unittest
 
 import function_app
 from dwg_geojson.converter import ConversionStats
-from dwg_geojson.repository import PersistenceError
+from dwg_geojson.repository import PersistenceError, StoredGeoJsonNotFoundError
+from dwg_geojson.retrieval_service import GeoJsonRetrievalService
 from dwg_geojson.storage_models import SourceInfo
 from dwg_geojson.storage_service import GeoJsonStorageService
 
@@ -27,6 +28,18 @@ class FakeRepository:
 
     def upsert_chunk(self, chunk) -> None:
         self.chunks.append(chunk)
+
+    def get_metadata(self, conversion_id: str):
+        if self.metadata is None or self.metadata.conversion_id != conversion_id:
+            return None
+        return self.metadata.to_item()
+
+    def get_chunks(self, conversion_id: str):
+        return [
+            chunk.to_item()
+            for chunk in self.chunks
+            if chunk.conversion_id == conversion_id
+        ]
 
 
 class FailingRepository(FakeRepository):
@@ -109,16 +122,61 @@ class GeoJsonStorageServiceTests(unittest.TestCase):
             )
 
 
+class GeoJsonRetrievalServiceTests(unittest.TestCase):
+    def test_get_rebuilds_geojson_with_metadata(self) -> None:
+        repo = FakeRepository()
+        storage = GeoJsonStorageService(repo, target_chunk_bytes=250)
+        features = [_feature("x" * 180), _feature("y" * 180)]
+        storage.store(
+            conversion_id="conversion-4",
+            correlation_id="correlation-4",
+            geojson={"type": "FeatureCollection", "features": features},
+            stats=_stats(2),
+            source=SourceInfo(source_type="test", file_name="drawing.dwg"),
+            request_options={},
+        )
+
+        result = GeoJsonRetrievalService(repo).get("conversion-4")
+
+        self.assertEqual(result["conversionId"], "conversion-4")
+        self.assertEqual(result["metadata"]["documentType"], "conversionMetadata")
+        self.assertEqual(result["geojson"]["features"], features)
+
+    def test_get_missing_conversion_returns_not_found(self) -> None:
+        with self.assertRaises(StoredGeoJsonNotFoundError):
+            GeoJsonRetrievalService(FakeRepository()).get("missing")
+
+    def test_get_incomplete_conversion_fails(self) -> None:
+        repo = FakeRepository()
+        storage = GeoJsonStorageService(repo)
+        storage.store(
+            conversion_id="conversion-5",
+            correlation_id="correlation-5",
+            geojson={"type": "FeatureCollection", "features": [_feature()]},
+            stats=_stats(1),
+            source=SourceInfo(source_type="test", file_name="drawing.dwg"),
+            request_options={},
+        )
+        repo.chunks.clear()
+
+        with self.assertRaisesRegex(PersistenceError, "incomplete"):
+            GeoJsonRetrievalService(repo).get("conversion-5")
+
+
 class FunctionAppPersistenceTests(unittest.TestCase):
     def setUp(self) -> None:
         self._original_convert_request = function_app._convert_request
+        self._original_repository = function_app._geojson_repository
         self._original_storage_service = function_app._storage_service
+        self._original_retrieval_service = function_app._retrieval_service
         self._logging_disable_level = logging.root.manager.disable
         logging.disable(logging.CRITICAL)
 
     def tearDown(self) -> None:
         function_app._convert_request = self._original_convert_request
+        function_app._geojson_repository = self._original_repository
         function_app._storage_service = self._original_storage_service
+        function_app._retrieval_service = self._original_retrieval_service
         logging.disable(self._logging_disable_level)
 
     def test_source_info_prefers_body_then_headers_then_query(self) -> None:
@@ -177,11 +235,72 @@ class FunctionAppPersistenceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         self.assertEqual(body["error"], "cad.persistence_failed")
 
+    def test_get_returns_metadata_envelope_from_cosmos(self) -> None:
+        repo = FakeRepository()
+        storage = GeoJsonStorageService(repo)
+        features = [_feature()]
+        storage.store(
+            conversion_id="conversion-6",
+            correlation_id="correlation-6",
+            geojson={"type": "FeatureCollection", "features": features},
+            stats=_stats(1),
+            source=SourceInfo(source_type="test", file_name="drawing.dwg"),
+            request_options={},
+        )
+        function_app._retrieval_service = GeoJsonRetrievalService(repo)
+
+        response = function_app.get_cad_geojson(
+            _FakeRequest(route_params={"conversion_id": "conversion-6"})
+        )
+        body = json.loads(response.get_body())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(body["conversionId"], "conversion-6")
+        self.assertEqual(body["geojson"]["features"], features)
+        self.assertEqual(response.headers["x-cosmos-chunk-count"], "1")
+
+    def test_get_can_return_raw_geojson(self) -> None:
+        repo = FakeRepository()
+        storage = GeoJsonStorageService(repo)
+        geojson = {"type": "FeatureCollection", "features": [_feature()]}
+        storage.store(
+            conversion_id="conversion-7",
+            correlation_id="correlation-7",
+            geojson=geojson,
+            stats=_stats(1),
+            source=SourceInfo(source_type="test", file_name="drawing.dwg"),
+            request_options={},
+        )
+        function_app._retrieval_service = GeoJsonRetrievalService(repo)
+
+        response = function_app.get_cad_geojson(
+            _FakeRequest(
+                params={"format": "geojson"},
+                route_params={"conversion_id": "conversion-7"},
+            )
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "application/geo+json")
+        self.assertEqual(json.loads(response.get_body()), geojson)
+
+    def test_get_missing_conversion_returns_404(self) -> None:
+        function_app._retrieval_service = GeoJsonRetrievalService(FakeRepository())
+
+        response = function_app.get_cad_geojson(
+            _FakeRequest(route_params={"conversion_id": "missing"})
+        )
+        body = json.loads(response.get_body())
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(body["error"], "cad.not_found")
+
 
 class _FakeRequest:
-    def __init__(self, headers=None, params=None) -> None:
+    def __init__(self, headers=None, params=None, route_params=None) -> None:
         self.headers = headers or {}
         self.params = params or {}
+        self.route_params = route_params or {}
 
 
 if __name__ == "__main__":

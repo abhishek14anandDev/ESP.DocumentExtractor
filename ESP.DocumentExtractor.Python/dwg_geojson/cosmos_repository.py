@@ -75,9 +75,43 @@ class CosmosGeoJsonRepository:
     def upsert_chunk(self, chunk: GeoJsonChunk) -> None:
         self._upsert(chunk.to_item())
 
+    def get_metadata(self, conversion_id: str) -> dict | None:
+        self.ensure_ready()
+        try:
+            return self._container.read_item(
+                item=f"{conversion_id}:metadata",
+                partition_key=conversion_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - SDK exceptions vary by version.
+            if _is_not_found(exc):
+                return None
+            raise PersistenceError(f"Cosmos DB metadata read failed: {exc}") from exc
+
+    def get_chunks(self, conversion_id: str) -> list[dict]:
+        self.ensure_ready()
+        try:
+            chunks = self._container.query_items(
+                query=(
+                    "SELECT * FROM c WHERE c.conversionId = @conversionId "
+                    "AND c.documentType = 'geoJsonChunk' ORDER BY c.chunkIndex"
+                ),
+                parameters=[{"name": "@conversionId", "value": conversion_id}],
+                partition_key=conversion_id,
+            )
+            return list(chunks)
+        except Exception as exc:  # noqa: BLE001 - SDK exceptions vary by version.
+            raise PersistenceError(f"Cosmos DB chunk read failed: {exc}") from exc
+
     def _upsert(self, item: dict[str, Any]) -> None:
         self.ensure_ready()
         try:
             self._container.upsert_item(item)
         except Exception as exc:  # noqa: BLE001 - SDK exceptions vary by version.
             raise PersistenceError(f"Cosmos DB upsert failed: {exc}") from exc
+
+
+def _is_not_found(exc: Exception) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    if status_code == 404:
+        return True
+    return exc.__class__.__name__ == "CosmosResourceNotFoundError"

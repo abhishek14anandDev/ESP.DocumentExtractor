@@ -11,6 +11,10 @@ class PersistenceError(Exception):
     """Raised when generated GeoJSON cannot be persisted."""
 
 
+class StoredGeoJsonNotFoundError(PersistenceError):
+    """Raised when a persisted GeoJSON conversion cannot be found."""
+
+
 class GeoJsonRepository(Protocol):
     """Repository abstraction used by the function layer."""
 
@@ -26,3 +30,9 @@ class GeoJsonRepository(Protocol):
 
     def upsert_chunk(self, chunk: GeoJsonChunk) -> None:
         """Persist one ordered GeoJSON feature chunk."""
+
+    def get_metadata(self, conversion_id: str) -> dict | None:
+        """Return one conversion metadata item by conversion id."""
+
+    def get_chunks(self, conversion_id: str) -> list[dict]:
+        """Return all ordered feature chunk items for a conversion id."""

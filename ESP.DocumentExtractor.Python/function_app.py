@@ -2,6 +2,7 @@
 
 Endpoint:
     POST /api/cad/geojson
+    GET  /api/cad/geojson/{conversion_id}
 
 Two request styles are supported:
   1. multipart/form-data with a file field named ``file`` (the DWG/DXF upload).
@@ -30,13 +31,16 @@ from dwg_geojson import (
     convert_file_to_geojson,
 )
 from dwg_geojson.cosmos_repository import CosmosGeoJsonRepository
-from dwg_geojson.repository import PersistenceError
+from dwg_geojson.repository import PersistenceError, StoredGeoJsonNotFoundError
+from dwg_geojson.retrieval_service import GeoJsonRetrievalService
 from dwg_geojson.storage_models import SourceInfo
 from dwg_geojson.storage_service import GeoJsonStorageService
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 logger = logging.getLogger("dwg_geojson.function")
+_geojson_repository: CosmosGeoJsonRepository | None = None
 _storage_service: GeoJsonStorageService | None = None
+_retrieval_service: GeoJsonRetrievalService | None = None
 
 
 @dataclass(frozen=True)
@@ -102,11 +106,71 @@ def cad_geojson(req: func.HttpRequest) -> func.HttpResponse:
     )
 
 
+@app.route(route="cad/geojson/{conversion_id}", methods=["GET"])
+def get_cad_geojson(req: func.HttpRequest) -> func.HttpResponse:
+    correlation_id = req.headers.get("x-correlation-id") or uuid.uuid4().hex
+    conversion_id = (req.route_params.get("conversion_id") or "").strip()
+    logger.info("[%s] CAD GeoJSON retrieval requested: %s", correlation_id, conversion_id)
+
+    try:
+        stored = _get_retrieval_service().get(conversion_id)
+    except ValueError as exc:
+        logger.warning("[%s] Bad retrieval request: %s", correlation_id, exc)
+        return _error(correlation_id, "request.invalid", str(exc), 400)
+    except StoredGeoJsonNotFoundError as exc:
+        logger.warning("[%s] Stored GeoJSON not found: %s", correlation_id, exc)
+        return _error(correlation_id, "cad.not_found", str(exc), 404)
+    except PersistenceError as exc:
+        logger.exception("[%s] Cosmos retrieval failed", correlation_id)
+        return _error(correlation_id, "cad.persistence_failed", str(exc), 500)
+
+    metadata = stored["metadata"]
+    headers = {
+        "x-correlation-id": correlation_id,
+        "x-cosmos-conversion-id": stored["conversionId"],
+        "x-cosmos-container": metadata.get("containerName", ""),
+        "x-cosmos-chunk-count": str(metadata.get("chunkCount", "")),
+        "x-conversion-feature-count": str(metadata.get("featureCount", "")),
+        "access-control-expose-headers": "x-correlation-id,x-cosmos-conversion-id,"
+        "x-cosmos-container,x-cosmos-chunk-count,x-conversion-feature-count",
+        "access-control-allow-origin": "*",
+    }
+
+    if (req.params.get("format") or "").strip().lower() == "geojson":
+        return func.HttpResponse(
+            body=json.dumps(stored["geojson"]),
+            status_code=200,
+            mimetype="application/geo+json",
+            headers=headers,
+        )
+
+    return func.HttpResponse(
+        body=json.dumps(stored),
+        status_code=200,
+        mimetype="application/json",
+        headers=headers,
+    )
+
+
+def _get_repository() -> CosmosGeoJsonRepository:
+    global _geojson_repository
+    if _geojson_repository is None:
+        _geojson_repository = CosmosGeoJsonRepository.from_env()
+    return _geojson_repository
+
+
 def _get_storage_service() -> GeoJsonStorageService:
     global _storage_service
     if _storage_service is None:
-        _storage_service = GeoJsonStorageService(CosmosGeoJsonRepository.from_env())
+        _storage_service = GeoJsonStorageService(_get_repository())
     return _storage_service
+
+
+def _get_retrieval_service() -> GeoJsonRetrievalService:
+    global _retrieval_service
+    if _retrieval_service is None:
+        _retrieval_service = GeoJsonRetrievalService(_get_repository())
+    return _retrieval_service
 
 
 def _bool_param(req: func.HttpRequest, name: str, default: bool) -> bool:
