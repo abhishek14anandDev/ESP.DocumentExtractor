@@ -102,6 +102,23 @@ class CosmosGeoJsonRepository:
         except Exception as exc:  # noqa: BLE001 - SDK exceptions vary by version.
             raise PersistenceError(f"Cosmos DB chunk read failed: {exc}") from exc
 
+    def list_metadata(self, limit: int) -> list[dict]:
+        self.ensure_ready()
+        try:
+            metadata_items = self._container.query_items(
+                query=(
+                    "SELECT c.conversionId, c.createdUtc, c.source, "
+                    "c.featureCount, c.chunkCount FROM c "
+                    "WHERE c.documentType = 'conversionMetadata' "
+                    "ORDER BY c.createdUtc DESC OFFSET 0 LIMIT @limit"
+                ),
+                parameters=[{"name": "@limit", "value": limit}],
+                enable_cross_partition_query=True,
+            )
+            return list(metadata_items)
+        except Exception as exc:  # noqa: BLE001 - SDK exceptions vary by version.
+            raise PersistenceError(f"Cosmos DB metadata list failed: {exc}") from exc
+
     def _upsert(self, item: dict[str, Any]) -> None:
         self.ensure_ready()
         try:

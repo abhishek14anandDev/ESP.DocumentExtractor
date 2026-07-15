@@ -192,6 +192,29 @@ WHERE c.documentType = "conversionMetadata"
 
 ### Read persisted GeoJSON
 
+List stored conversions from Cosmos metadata:
+
+```bash
+curl "http://localhost:7071/api/cad/geojson?limit=100"
+```
+
+The response is a compact array for UI list screens:
+
+```json
+[
+  {
+    "conversionId": "<conversion-id>",
+    "fileName": "drawing.dwg",
+    "createdUtc": "2026-07-15T00:00:00+00:00",
+    "featureCount": 42500,
+    "chunkCount": 48,
+    "sourceType": "multipart-upload",
+    "sourceReference": null,
+    "sourceSystem": null
+  }
+]
+```
+
 Use the Cosmos conversion id returned by `x-cosmos-conversion-id` after a
 successful POST:
 

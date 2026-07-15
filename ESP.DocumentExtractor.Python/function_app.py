@@ -106,6 +106,29 @@ def cad_geojson(req: func.HttpRequest) -> func.HttpResponse:
     )
 
 
+@app.route(route="cad/geojson", methods=["GET"])
+def list_cad_geojson(req: func.HttpRequest) -> func.HttpResponse:
+    correlation_id = req.headers.get("x-correlation-id") or uuid.uuid4().hex
+    logger.info("[%s] CAD GeoJSON metadata list requested", correlation_id)
+
+    try:
+        limit = _int_param(req, "limit", 100)
+        items = _get_retrieval_service().list(limit)
+    except ValueError as exc:
+        logger.warning("[%s] Bad metadata list request: %s", correlation_id, exc)
+        return _error(correlation_id, "request.invalid", str(exc), 400)
+    except PersistenceError as exc:
+        logger.exception("[%s] Cosmos metadata list failed", correlation_id)
+        return _error(correlation_id, "cad.persistence_failed", str(exc), 500)
+
+    return func.HttpResponse(
+        body=json.dumps(items),
+        status_code=200,
+        mimetype="application/json",
+        headers=_cors_headers(correlation_id),
+    )
+
+
 @app.route(route="cad/geojson/{conversion_id}", methods=["GET"])
 def get_cad_geojson(req: func.HttpRequest) -> func.HttpResponse:
     correlation_id = req.headers.get("x-correlation-id") or uuid.uuid4().hex
@@ -178,6 +201,17 @@ def _bool_param(req: func.HttpRequest, name: str, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _int_param(req: func.HttpRequest, name: str, default: int) -> int:
+    value = req.params.get(name)
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"Query parameter '{name}' must be an integer.") from exc
+    return max(1, min(parsed, 500))
 
 
 def _geo_options(req: func.HttpRequest) -> dict:
@@ -329,5 +363,13 @@ def _error(correlation_id: str, code: str, message: str, status: int) -> func.Ht
         body=json.dumps(payload),
         status_code=status,
         mimetype="application/json",
-        headers={"x-correlation-id": correlation_id},
+        headers=_cors_headers(correlation_id),
     )
+
+
+def _cors_headers(correlation_id: str) -> dict[str, str]:
+    return {
+        "x-correlation-id": correlation_id,
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "x-correlation-id",
+    }

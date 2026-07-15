@@ -58,3 +58,27 @@ class GeoJsonRetrievalService:
                 "features": features,
             },
         }
+
+    def list(self, limit: int = 100) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit), 500))
+        metadata_items = self._repository.list_metadata(limit)
+        metadata_items = sorted(
+            metadata_items,
+            key=lambda item: str(item.get("createdUtc") or ""),
+            reverse=True,
+        )
+        return [_to_summary(item) for item in metadata_items[:limit]]
+
+
+def _to_summary(item: dict[str, Any]) -> dict[str, Any]:
+    source = item.get("source") if isinstance(item.get("source"), dict) else {}
+    return {
+        "conversionId": item.get("conversionId"),
+        "fileName": source.get("fileName") or "",
+        "createdUtc": item.get("createdUtc"),
+        "featureCount": item.get("featureCount"),
+        "chunkCount": item.get("chunkCount"),
+        "sourceType": source.get("sourceType"),
+        "sourceReference": source.get("sourceReference"),
+        "sourceSystem": source.get("sourceSystem"),
+    }

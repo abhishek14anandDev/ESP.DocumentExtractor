@@ -36,3 +36,6 @@ class GeoJsonRepository(Protocol):
 
     def get_chunks(self, conversion_id: str) -> list[dict]:
         """Return all ordered feature chunk items for a conversion id."""
+
+    def list_metadata(self, limit: int) -> list[dict]:
+        """Return recent conversion metadata items."""

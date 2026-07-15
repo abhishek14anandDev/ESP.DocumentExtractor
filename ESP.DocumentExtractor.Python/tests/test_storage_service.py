@@ -18,6 +18,7 @@ class FakeRepository:
     def __init__(self) -> None:
         self.ready = False
         self.metadata = None
+        self.metadata_items = []
         self.chunks = []
 
     def ensure_ready(self) -> None:
@@ -25,6 +26,7 @@ class FakeRepository:
 
     def upsert_metadata(self, metadata) -> None:
         self.metadata = metadata
+        self.metadata_items.append(metadata)
 
     def upsert_chunk(self, chunk) -> None:
         self.chunks.append(chunk)
@@ -41,9 +43,20 @@ class FakeRepository:
             if chunk.conversion_id == conversion_id
         ]
 
+    def list_metadata(self, limit: int):
+        return [
+            metadata.to_item()
+            for metadata in self.metadata_items[:limit]
+        ]
+
 
 class FailingRepository(FakeRepository):
     def upsert_metadata(self, metadata) -> None:
+        raise PersistenceError("cosmos unavailable")
+
+
+class FailingListRepository(FakeRepository):
+    def list_metadata(self, limit: int):
         raise PersistenceError("cosmos unavailable")
 
 
@@ -161,6 +174,43 @@ class GeoJsonRetrievalServiceTests(unittest.TestCase):
 
         with self.assertRaisesRegex(PersistenceError, "incomplete"):
             GeoJsonRetrievalService(repo).get("conversion-5")
+
+    def test_list_returns_recent_metadata_summaries(self) -> None:
+        repo = FakeRepository()
+        storage = GeoJsonStorageService(repo)
+        storage.store(
+            conversion_id="older",
+            correlation_id="correlation-old",
+            geojson={"type": "FeatureCollection", "features": [_feature()]},
+            stats=_stats(1),
+            source=SourceInfo(
+                source_type="local-file-path",
+                file_name="old.dwg",
+                source_reference="C:/cad/old.dwg",
+                source_system="local",
+            ),
+            request_options={},
+        )
+        storage.store(
+            conversion_id="newer",
+            correlation_id="correlation-new",
+            geojson={"type": "FeatureCollection", "features": [_feature(), _feature()]},
+            stats=_stats(2),
+            source=SourceInfo(source_type="multipart-upload", file_name="new.dxf"),
+            request_options={},
+        )
+        repo.metadata_items[0] = _replace_created_utc(repo.metadata_items[0], "2026-01-01T00:00:00+00:00")
+        repo.metadata_items[1] = _replace_created_utc(repo.metadata_items[1], "2026-02-01T00:00:00+00:00")
+
+        result = GeoJsonRetrievalService(repo).list(100)
+
+        self.assertEqual([item["conversionId"] for item in result], ["newer", "older"])
+        self.assertEqual(result[0]["fileName"], "new.dxf")
+        self.assertEqual(result[0]["featureCount"], 2)
+        self.assertEqual(result[1]["sourceReference"], "C:/cad/old.dwg")
+
+    def test_list_empty_metadata_returns_empty_list(self) -> None:
+        self.assertEqual(GeoJsonRetrievalService(FakeRepository()).list(100), [])
 
 
 class FunctionAppPersistenceTests(unittest.TestCase):
@@ -295,12 +345,71 @@ class FunctionAppPersistenceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(body["error"], "cad.not_found")
 
+    def test_list_returns_compact_metadata_from_cosmos(self) -> None:
+        repo = FakeRepository()
+        storage = GeoJsonStorageService(repo)
+        storage.store(
+            conversion_id="conversion-8",
+            correlation_id="correlation-8",
+            geojson={"type": "FeatureCollection", "features": [_feature()]},
+            stats=_stats(1),
+            source=SourceInfo(source_type="test", file_name="drawing.dwg"),
+            request_options={},
+        )
+        function_app._retrieval_service = GeoJsonRetrievalService(repo)
+
+        response = function_app.list_cad_geojson(_FakeRequest(params={"limit": "100"}))
+        body = json.loads(response.get_body())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(body[0]["conversionId"], "conversion-8")
+        self.assertEqual(body[0]["fileName"], "drawing.dwg")
+        self.assertNotIn("geojson", body[0])
+        self.assertEqual(response.headers["access-control-allow-origin"], "*")
+
+    def test_list_empty_cosmos_metadata_returns_empty_array(self) -> None:
+        function_app._retrieval_service = GeoJsonRetrievalService(FakeRepository())
+
+        response = function_app.list_cad_geojson(_FakeRequest())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(json.loads(response.get_body()), [])
+
+    def test_list_persistence_failure_returns_error(self) -> None:
+        function_app._retrieval_service = GeoJsonRetrievalService(FailingListRepository())
+
+        response = function_app.list_cad_geojson(_FakeRequest())
+        body = json.loads(response.get_body())
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(body["error"], "cad.persistence_failed")
+
 
 class _FakeRequest:
     def __init__(self, headers=None, params=None, route_params=None) -> None:
         self.headers = headers or {}
         self.params = params or {}
         self.route_params = route_params or {}
+
+
+def _replace_created_utc(metadata, created_utc: str):
+    return type(metadata)(
+        conversion_id=metadata.conversion_id,
+        correlation_id=metadata.correlation_id,
+        source=metadata.source,
+        feature_count=metadata.feature_count,
+        converter=metadata.converter,
+        source_epsg=metadata.source_epsg,
+        reprojected=metadata.reprojected,
+        filtered_out=metadata.filtered_out,
+        chunk_count=metadata.chunk_count,
+        output_hash=metadata.output_hash,
+        created_utc=created_utc,
+        container_name=metadata.container_name,
+        request_options=metadata.request_options,
+        entity_counts=metadata.entity_counts,
+        skipped=metadata.skipped,
+    )
 
 
 if __name__ == "__main__":
