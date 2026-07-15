@@ -7,10 +7,16 @@ from .converter import (
     convert_file_to_geojson,
     drawing_to_geojson,
 )
+from .repository import PersistenceError
+from .storage_models import GeoJsonChunk, SourceInfo, StoredGeoJsonMetadata
 
 __all__ = [
     "ConversionError",
     "ConversionStats",
+    "GeoJsonChunk",
+    "PersistenceError",
+    "SourceInfo",
+    "StoredGeoJsonMetadata",
     "convert_bytes_to_geojson",
     "convert_file_to_geojson",
     "drawing_to_geojson",

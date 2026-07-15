@@ -1,0 +1,10 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "COSMOS_CONNECTION_STRING": "AccountEndpoint=https://<account>.documents.azure.com:443/;AccountKey=<rotated-key>;",
+    "COSMOS_DATABASE_NAME": "esp-document-extractor",
+    "COSMOS_CONTAINER_NAME": "cad-geojson"
+  }
+}

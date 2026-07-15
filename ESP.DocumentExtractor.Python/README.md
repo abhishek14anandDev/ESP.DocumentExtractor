@@ -51,6 +51,25 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### Cosmos DB persistence
+
+Every successful HTTP conversion is persisted to Azure Cosmos DB for NoSQL as
+one metadata item plus ordered feature chunk items. This avoids the Cosmos DB
+2 MB item limit for large GeoJSON outputs.
+
+Configure these settings in Azure Function App settings, or in the ignored
+`local.settings.json` for local runs:
+
+| Setting | Default | Purpose |
+| ------- | ------- | ------- |
+| `COSMOS_CONNECTION_STRING` | none | Cosmos DB connection string. Required for successful conversions. |
+| `COSMOS_DATABASE_NAME` | `esp-document-extractor` | Database created/read by the function. |
+| `COSMOS_CONTAINER_NAME` | `cad-geojson` | Container for conversion metadata and chunks. |
+
+Use `local.settings.sample.json` as the local template. Do not commit real
+Cosmos keys. If a key was shared in chat or email, rotate it before using it in
+the function app.
+
 ## Quick test (CLI)
 
 Convert a DWG file to GeoJSON without running the function host:
@@ -147,8 +166,29 @@ curl -X POST http://localhost:7071/api/cad/geojson \
 ### Response
 
 - `200 OK`, body = GeoJSON `FeatureCollection` (`application/geo+json`)
-- Headers: `x-correlation-id`, `x-conversion-converter`, `x-conversion-feature-count`
+- Headers: `x-correlation-id`, `x-conversion-converter`, `x-conversion-feature-count`,
+  `x-cosmos-conversion-id`, `x-cosmos-container`, `x-cosmos-chunk-count`
 - `400` / `500` with a JSON error body `{ correlationId, error, message }`
+
+Optional source metadata can be passed without changing the CAD payload:
+
+- JSON body: `sourceSystem`, `sourceReference`
+- Headers: `x-source-system`, `x-source-reference`
+- Query string fallback: `?sourceSystem=...&sourceReference=...`
+
+The persisted metadata records the file name, source type, source reference,
+source system, input SHA-256 hash, conversion diagnostics, output SHA-256 hash,
+and chunk count.
+
+Example Cosmos query for a file/source:
+
+```sql
+SELECT c.conversionId, c.createdUtc, c.source.fileName, c.source.sourceSystem,
+       c.featureCount, c.chunkCount
+FROM c
+WHERE c.documentType = "conversionMetadata"
+  AND c.source.fileName = "drawing.dwg"
+```
 
 ## Deployment notes
 
@@ -168,19 +208,26 @@ ENV AzureWebJobsScriptRoot=/home/site/wwwroot AzureFunctionsJobHost__Logging__Co
 
 2. Or restrict the deployed function to `.dxf` input (no external binary needed).
 
+3. Add the Cosmos settings as Function App configuration values. The connection
+   string must not be stored in source control.
+
 ## Project layout
 
 ```
 ESP.DocumentExtractor.Python/
-├── function_app.py          # Azure Functions v2 HTTP app (POST /api/cad/geojson)
-├── dwg_geojson/
-│   ├── __init__.py
-│   └── converter.py         # DWG/DXF → GeoJSON conversion + reprojection/filtering
-├── cli.py                   # Local command-line converter
-├── viewer.html              # deck.gl-over-Google-Maps viewer for WGS84 GeoJSON
-├── Dockerfile               # Custom Functions image bundling LibreDWG
-├── requirements.txt
-├── host.json
-├── local.settings.json
-└── README.md
+|-- function_app.py              # Azure Functions v2 HTTP app
+|-- dwg_geojson/
+|   |-- converter.py             # DWG/DXF to GeoJSON conversion
+|   |-- storage_service.py       # metadata/chunk persistence service
+|   |-- storage_models.py        # persistence domain models
+|   |-- repository.py            # persistence repository port
+|   `-- cosmos_repository.py     # Cosmos DB repository adapter
+|-- cli.py                       # Local command-line converter
+|-- viewer.html                  # deck.gl-over-Google-Maps viewer
+|-- Dockerfile                   # Custom Functions image bundling LibreDWG
+|-- requirements.txt
+|-- host.json
+|-- local.settings.sample.json   # placeholder local settings
+|-- local.settings.json          # ignored local secrets
+`-- README.md
 ```
