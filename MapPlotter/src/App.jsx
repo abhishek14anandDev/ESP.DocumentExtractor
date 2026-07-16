@@ -104,7 +104,7 @@ function App() {
 
     const script = document.createElement("script");
     script.dataset.mapplotterGoogleMaps = "true";
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&v=weekly`;
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&v=weekly`; 
     script.async = true;
     script.onload = () => setMapsReady(true);
     script.onerror = () => setPlotError("Google Maps failed to load. Check the API key and network access.");
