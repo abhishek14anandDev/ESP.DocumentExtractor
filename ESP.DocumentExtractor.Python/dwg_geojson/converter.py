@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import ezdxf
@@ -57,6 +58,29 @@ _DEFAULT_CLUSTER_RADIUS_M = 25_000.0
 
 class ConversionError(Exception):
     """Raised when a DWG/DXF file cannot be converted to GeoJSON."""
+
+
+def _configure_oda_file_converter() -> None:
+    """Point ezdxf at winget's versioned ODA install path on Windows."""
+    if os.name != "nt":
+        return
+
+    try:
+        default_path = Path(ezdxf.options.get("odafc-addon", "win_exec_path").strip('"'))
+        if default_path.is_file():
+            return
+
+        candidates: list[Path] = []
+        for root in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)")):
+            if not root:
+                continue
+            candidates.extend(Path(root, "ODA").glob("ODAFileConverter*/ODAFileConverter.exe"))
+
+        if candidates:
+            executable = max(candidates, key=lambda path: path.stat().st_mtime)
+            ezdxf.options.set("odafc-addon", "win_exec_path", str(executable))
+    except Exception as exc:  # noqa: BLE001 - detection should not block conversion fallback.
+        logger.debug("ODA File Converter auto-detection skipped: %s", exc)
 
 
 @dataclass
@@ -175,6 +199,8 @@ def _convert_dwg_to_dxf(dwg_path: str, work_dir: str) -> tuple[str, str]:
         logger.warning(
             "dwg2dxf failed (code=%s): %s", result.returncode, result.stderr.strip()
         )
+
+    _configure_oda_file_converter()
 
     try:
         from ezdxf.addons import odafc

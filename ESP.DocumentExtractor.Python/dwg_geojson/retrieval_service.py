@@ -6,7 +6,7 @@ from typing import Any
 
 from .repository import GeoJsonRepository, PersistenceError, StoredGeoJsonNotFoundError
 
-
+#comment
 class GeoJsonRetrievalService:
     """Reads persisted metadata and chunks and rebuilds a FeatureCollection."""
 
