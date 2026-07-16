@@ -1,0 +1,117 @@
+name: Deploy MapPlotter Azure Web App
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - MapPlotter/**
+      - .github/workflows/deploy-mapplotter.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AZURE_WEBAPP_NAME: mapplotter
+  APP_PACKAGE_PATH: MapPlotter
+  DEPLOY_PACKAGE_PATH: mapplotter-package
+  NODE_VERSION: "24.x"
+  VITE_API_BASE_URL: https://pydataextractor-cyb2a3htduguf5ge.canadacentral-01.azurewebsites.net/api
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ env.APP_PACKAGE_PATH }}/package-lock.json
+
+      - name: Validate production build settings
+        env:
+          VITE_GOOGLE_MAPS_API_KEY: ${{ secrets.MAPPLOTTER_GOOGLE_MAPS_API_KEY }}
+        run: |
+          test -n "${VITE_GOOGLE_MAPS_API_KEY}" || (echo "Set the MAPPLOTTER_GOOGLE_MAPS_API_KEY repository secret." && exit 1)
+
+      - name: Install dependencies
+        working-directory: ${{ env.APP_PACKAGE_PATH }}
+        run: npm ci
+
+      - name: Build MapPlotter
+        working-directory: ${{ env.APP_PACKAGE_PATH }}
+        env:
+          VITE_GOOGLE_MAPS_API_KEY: ${{ secrets.MAPPLOTTER_GOOGLE_MAPS_API_KEY }}
+        run: npm run build
+
+      - name: Prepare deployment package
+        run: |
+          rm -rf "${DEPLOY_PACKAGE_PATH}"
+          mkdir -p "${DEPLOY_PACKAGE_PATH}"
+          cp -R "${APP_PACKAGE_PATH}/dist" "${DEPLOY_PACKAGE_PATH}/dist"
+          cat > "${DEPLOY_PACKAGE_PATH}/package.json" <<'EOF'
+          {
+            "name": "mapplotter-webapp",
+            "private": true,
+            "type": "module",
+            "scripts": {
+              "start": "node server.js"
+            }
+          }
+          EOF
+          cat > "${DEPLOY_PACKAGE_PATH}/server.js" <<'EOF'
+          import { createReadStream, existsSync, statSync } from "node:fs";
+          import { createServer } from "node:http";
+          import { extname, join, normalize, resolve } from "node:path";
+          import { fileURLToPath } from "node:url";
+
+          const __dirname = fileURLToPath(new URL(".", import.meta.url));
+          const distRoot = resolve(__dirname, "dist");
+          const port = Number(process.env.PORT || 8080);
+          const mimeTypes = {
+            ".css": "text/css; charset=utf-8",
+            ".html": "text/html; charset=utf-8",
+            ".js": "text/javascript; charset=utf-8",
+            ".json": "application/json; charset=utf-8",
+            ".png": "image/png",
+            ".svg": "image/svg+xml",
+            ".webp": "image/webp"
+          };
+
+          const server = createServer((request, response) => {
+            if (request.url === "/healthz") {
+              response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+              response.end("ok");
+              return;
+            }
+
+            const requestPath = normalize(decodeURIComponent((request.url || "/").split("?")[0])).replace(/^(\.\.[/\\])+/, "");
+            const assetPath = resolve(distRoot, `.${requestPath}`);
+            const filePath = assetPath.startsWith(distRoot) && existsSync(assetPath) && statSync(assetPath).isFile()
+              ? assetPath
+              : join(distRoot, "index.html");
+
+            response.writeHead(200, {
+              "Content-Type": mimeTypes[extname(filePath)] || "application/octet-stream",
+              "Cache-Control": extname(filePath) === ".html" ? "no-store" : "public, max-age=31536000, immutable"
+            });
+            createReadStream(filePath).pipe(response);
+          });
+
+          server.listen(port, () => {
+            console.log(`MapPlotter listening on port ${port}`);
+          });
+          EOF
+
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          package: ${{ env.DEPLOY_PACKAGE_PATH }}
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE_MAPPLOTTER }}
