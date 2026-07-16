@@ -38,6 +38,7 @@ from dwg_geojson.storage_service import GeoJsonStorageService
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 logger = logging.getLogger("dwg_geojson.function")
+DEFAULT_GEOJSON_LOG_MAX_CHARS = 20_000
 _geojson_repository: CosmosGeoJsonRepository | None = None
 _storage_service: GeoJsonStorageService | None = None
 _retrieval_service: GeoJsonRetrievalService | None = None
@@ -87,6 +88,7 @@ def cad_geojson(req: func.HttpRequest) -> func.HttpResponse:
         converted.stats.reprojected,
         converted.stats.source_epsg,
     )
+    _log_geojson_payload(correlation_id, conversion_id, "converted", converted.geojson)
 
     try:
         logger.info("[%s] Cosmos persistence starting: conversionId=%s", correlation_id, conversion_id)
@@ -188,6 +190,7 @@ def get_cad_geojson(req: func.HttpRequest) -> func.HttpResponse:
         metadata.get("featureCount", ""),
         (req.params.get("format") or "envelope").strip().lower(),
     )
+    _log_geojson_payload(correlation_id, stored["conversionId"], "retrieved", stored["geojson"])
     headers = {
         "x-correlation-id": correlation_id,
         "x-cosmos-conversion-id": stored["conversionId"],
@@ -242,6 +245,45 @@ def _get_retrieval_service() -> GeoJsonRetrievalService:
         logger.info("Creating GeoJsonRetrievalService")
         _retrieval_service = GeoJsonRetrievalService(_get_repository())
     return _retrieval_service
+
+
+def _log_geojson_payload(
+    correlation_id: str,
+    conversion_id: str,
+    stage: str,
+    geojson: dict[str, Any],
+) -> None:
+    payload = json.dumps(geojson, separators=(",", ":"), ensure_ascii=False)
+    max_chars = _int_env("GEOJSON_LOG_MAX_CHARS", DEFAULT_GEOJSON_LOG_MAX_CHARS)
+    if max_chars == 0:
+        logged_payload = payload
+    else:
+        logged_payload = payload[:max_chars]
+        if len(payload) > max_chars:
+            logged_payload += f"...[truncated {len(payload) - max_chars} chars]"
+
+    logger.info(
+        "[%s] CAD GeoJSON payload %s: conversionId=%s chars=%s loggedChars=%s "
+        "truncated=%s geojson=%s",
+        correlation_id,
+        stage,
+        conversion_id,
+        len(payload),
+        len(logged_payload),
+        max_chars != 0 and len(payload) > max_chars,
+        logged_payload,
+    )
+
+
+def _int_env(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return max(0, int(value))
+    except ValueError:
+        logger.warning("Invalid integer environment setting %s=%r; using %s", name, value, default)
+        return default
 
 
 def _bool_param(req: func.HttpRequest, name: str, default: bool) -> bool:
