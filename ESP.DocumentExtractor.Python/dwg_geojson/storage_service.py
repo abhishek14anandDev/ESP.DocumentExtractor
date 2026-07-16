@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -14,6 +15,7 @@ from .storage_models import GeoJsonChunk, SourceInfo, StoredGeoJsonMetadata
 
 DEFAULT_TARGET_CHUNK_BYTES = 900 * 1024
 DEFAULT_MAX_CHUNK_BYTES = 1_800_000
+logger = logging.getLogger("dwg_geojson.storage_service")
 
 
 class GeoJsonStorageService:
@@ -40,6 +42,16 @@ class GeoJsonStorageService:
         source: SourceInfo,
         request_options: dict[str, Any],
     ) -> StoredGeoJsonMetadata:
+        logger.info(
+            "[%s] Preparing GeoJSON for Cosmos storage: conversionId=%s sourceType=%s "
+            "fileName=%s features=%s",
+            correlation_id,
+            conversion_id,
+            source.source_type,
+            source.file_name,
+            stats.feature_count,
+        )
+
         if geojson.get("type") != "FeatureCollection":
             raise PersistenceError("Only GeoJSON FeatureCollection output can be stored.")
 
@@ -50,6 +62,15 @@ class GeoJsonStorageService:
         created_utc = datetime.now(UTC).isoformat()
         feature_groups = self._group_features(raw_features)
         chunk_count = len(feature_groups)
+        logger.info(
+            "[%s] GeoJSON chunking completed: conversionId=%s chunks=%s "
+            "targetChunkBytes=%s maxChunkBytes=%s",
+            correlation_id,
+            conversion_id,
+            chunk_count,
+            self._target_chunk_bytes,
+            self._max_chunk_bytes,
+        )
         chunks = [
             GeoJsonChunk(
                 conversion_id=conversion_id,
@@ -90,6 +111,15 @@ class GeoJsonStorageService:
         for chunk in chunks:
             self._repository.upsert_chunk(chunk)
         self._repository.upsert_metadata(metadata)
+        logger.info(
+            "[%s] GeoJSON stored in Cosmos: conversionId=%s chunks=%s features=%s "
+            "container=%s",
+            correlation_id,
+            conversion_id,
+            chunk_count,
+            stats.feature_count,
+            metadata.container_name,
+        )
         return metadata
 
     def _group_features(self, features: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:

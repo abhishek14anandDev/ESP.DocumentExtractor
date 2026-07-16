@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .repository import GeoJsonRepository, PersistenceError, StoredGeoJsonNotFoundError
+
+logger = logging.getLogger("dwg_geojson.retrieval_service")
 
 #comment
 class GeoJsonRetrievalService:
@@ -18,9 +21,11 @@ class GeoJsonRetrievalService:
         if not conversion_id:
             raise ValueError("conversion_id is required.")
 
+        logger.info("Retrieving stored GeoJSON: conversionId=%s", conversion_id)
         self._repository.ensure_ready()
         metadata = self._repository.get_metadata(conversion_id)
         if metadata is None:
+            logger.info("Stored GeoJSON metadata not found: conversionId=%s", conversion_id)
             raise StoredGeoJsonNotFoundError(
                 f"GeoJSON conversion '{conversion_id}' was not found."
             )
@@ -28,6 +33,12 @@ class GeoJsonRetrievalService:
         chunks = self._repository.get_chunks(conversion_id)
         chunk_count = int(metadata.get("chunkCount") or 0)
         if chunk_count != len(chunks):
+            logger.info(
+                "Stored GeoJSON chunk count mismatch: conversionId=%s expected=%s found=%s",
+                conversion_id,
+                chunk_count,
+                len(chunks),
+            )
             raise PersistenceError(
                 f"GeoJSON conversion '{conversion_id}' is incomplete: "
                 f"expected {chunk_count} chunks, found {len(chunks)}."
@@ -36,6 +47,11 @@ class GeoJsonRetrievalService:
         chunks = sorted(chunks, key=lambda chunk: int(chunk.get("chunkIndex", 0)))
         for expected_index, chunk in enumerate(chunks):
             if int(chunk.get("chunkIndex", -1)) != expected_index:
+                logger.info(
+                    "Stored GeoJSON chunk order mismatch: conversionId=%s expectedIndex=%s",
+                    conversion_id,
+                    expected_index,
+                )
                 raise PersistenceError(
                     f"GeoJSON conversion '{conversion_id}' has a missing or "
                     f"out-of-order chunk at index {expected_index}."
@@ -45,11 +61,22 @@ class GeoJsonRetrievalService:
         for chunk in chunks:
             chunk_features = chunk.get("features")
             if not isinstance(chunk_features, list):
+                logger.info(
+                    "Stored GeoJSON chunk is invalid: conversionId=%s chunkIndex=%s",
+                    conversion_id,
+                    chunk.get("chunkIndex"),
+                )
                 raise PersistenceError(
                     f"GeoJSON conversion '{conversion_id}' contains an invalid chunk."
                 )
             features.extend(chunk_features)
 
+        logger.info(
+            "Stored GeoJSON reconstructed: conversionId=%s chunks=%s features=%s",
+            conversion_id,
+            len(chunks),
+            len(features),
+        )
         return {
             "conversionId": conversion_id,
             "metadata": metadata,
@@ -61,13 +88,16 @@ class GeoJsonRetrievalService:
 
     def list(self, limit: int = 100) -> list[dict[str, Any]]:
         limit = max(1, min(int(limit), 500))
+        logger.info("Listing stored GeoJSON metadata: limit=%s", limit)
         metadata_items = self._repository.list_metadata(limit)
         metadata_items = sorted(
             metadata_items,
             key=lambda item: str(item.get("createdUtc") or ""),
             reverse=True,
         )
-        return [_to_summary(item) for item in metadata_items[:limit]]
+        result = [_to_summary(item) for item in metadata_items[:limit]]
+        logger.info("Stored GeoJSON metadata list ready: returned=%s", len(result))
+        return result
 
 
 def _to_summary(item: dict[str, Any]) -> dict[str, Any]:
