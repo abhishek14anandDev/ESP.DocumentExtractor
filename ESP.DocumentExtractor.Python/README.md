@@ -267,6 +267,9 @@ ENV AzureWebJobsScriptRoot=/home/site/wwwroot AzureFunctionsJobHost__Logging__Co
 
 GitHub Actions deploys this Python function app to `pydataextractor` when changes
 under `ESP.DocumentExtractor.Python` are pushed to `main`.
+The workflow uses Kudu/Oryx remote build so native wheels such as NumPy are
+installed for the Function App's Linux Python runtime instead of being packaged
+from the GitHub runner.
 
 ## Project layout
 
