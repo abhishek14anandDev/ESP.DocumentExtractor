@@ -15,7 +15,7 @@ independent pipelines are supported, selected automatically:
 Output coordinates are rounded to keep payloads compact and properties are
 normalized to ``entityType`` / ``layer`` / ``handle`` / ``color``.
 """
-
+#python
 from __future__ import annotations
 
 import json
