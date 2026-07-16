@@ -23,6 +23,7 @@ GitHub Actions workflow:
 
 Repository secret required:
 
-- `AZURE_FUNCTIONAPP_PUBLISH_PROFILE_ESPDATAEXTRACTOR`
+- `AZURE_FUNCTIONAPP_PUBLISH_PROFILE_PYDATAEXTRACTOR`
 
-The workflow deploys the Function App `espdataextractor` on pushes to `main` and on manual dispatch.
+The workflow deploys the Python Function App `pydataextractor` on pushes to `main`
+when `ESP.DocumentExtractor.Python` changes, and on manual dispatch.

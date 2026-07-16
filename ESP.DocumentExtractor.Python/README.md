@@ -265,6 +265,9 @@ ENV AzureWebJobsScriptRoot=/home/site/wwwroot AzureFunctionsJobHost__Logging__Co
 3. Add the Cosmos settings as Function App configuration values. The connection
    string must not be stored in source control.
 
+GitHub Actions deploys this Python function app to `pydataextractor` when changes
+under `ESP.DocumentExtractor.Python` are pushed to `main`.
+
 ## Project layout
 
 ```

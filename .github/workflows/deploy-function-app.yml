@@ -1,19 +1,22 @@
-name: Deploy Azure Function App
+name: Deploy Python Azure Function App
 
 on:
   push:
     branches:
       - main
+    paths:
+      - ESP.DocumentExtractor.Python/**
+      - .github/workflows/deploy-function-app.yml
   workflow_dispatch:
 
 permissions:
   contents: read
 
 env:
-  DOTNET_VERSION: 10.0.x
-  SOLUTION_PATH: ESP.DocumentExtractor.sln
-  FUNCTION_PROJECT_PATH: src/FunctionApp/ESP.DocumentExtractor.FunctionApp.csproj
-  PUBLISH_OUTPUT_PATH: published-function-app
+  AZURE_FUNCTIONAPP_NAME: pydataextractor
+  AZURE_FUNCTIONAPP_PACKAGE_PATH: ESP.DocumentExtractor.Python
+  DEPLOY_PACKAGE_PATH: python-function-package
+  PYTHON_VERSION: "3.11"
 
 jobs:
   build-test-deploy:
@@ -23,26 +26,44 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Restore
-        run: dotnet restore $SOLUTION_PATH
+      - name: Install dependencies for tests
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r "${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}/requirements.txt"
 
-      - name: Build
-        run: dotnet build $SOLUTION_PATH --configuration Release --no-restore
+      - name: Run Python tests
+        working-directory: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
+        run: python -m unittest discover -s tests -p "test_*.py"
 
-      - name: Test
-        run: dotnet test $SOLUTION_PATH --configuration Release --no-build --verbosity normal
-
-      - name: Publish Function App
-        run: dotnet publish $FUNCTION_PROJECT_PATH --configuration Release --no-build --output $PUBLISH_OUTPUT_PATH
+      - name: Prepare deployment package
+        run: |
+          rm -rf "${{ env.DEPLOY_PACKAGE_PATH }}"
+          mkdir -p "${{ env.DEPLOY_PACKAGE_PATH }}"
+          rsync -av \
+            --exclude ".git*" \
+            --exclude ".venv" \
+            --exclude "__pycache__" \
+            --exclude ".vscode" \
+            --exclude "local.settings.json" \
+            --exclude "tests" \
+            --exclude "*.dxf" \
+            --exclude "*.dwg" \
+            --exclude "*.geojson" \
+            --exclude "sample_output" \
+            "${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}/" \
+            "${{ env.DEPLOY_PACKAGE_PATH }}/"
+          pip install \
+            --target="${{ env.DEPLOY_PACKAGE_PATH }}/.python_packages/lib/site-packages" \
+            -r "${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}/requirements.txt"
 
       - name: Deploy to Azure Functions
         uses: Azure/functions-action@v1
         with:
-          app-name: espdataextractor
-          package: ${{ env.PUBLISH_OUTPUT_PATH }}
-          publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE_ESPDATAEXTRACTOR }}
+          app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
+          package: ${{ env.DEPLOY_PACKAGE_PATH }}
+          publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE_PYDATAEXTRACTOR }}
