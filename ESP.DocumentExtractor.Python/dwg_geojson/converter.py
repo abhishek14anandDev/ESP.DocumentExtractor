@@ -13,7 +13,7 @@ independent pipelines are supported, selected automatically:
   is first converted with LibreDWG ``dwg2dxf`` or the ODA File Converter.
 
 Output coordinates are rounded to keep payloads compact and properties are
-normalized to ``entityType`` / ``layer`` / ``handle`` / ``color``.
+normalized to ``entityType`` / ``layer`` / ``handle`` / ``color``. 
 """
 
 from __future__ import annotations

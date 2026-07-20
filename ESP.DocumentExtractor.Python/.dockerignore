@@ -1,0 +1,15 @@
+.git
+.github
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.log
+out.geojson
+sample_output
+tests
+PubSettings
+local.settings.json
+local.settings.sample.json
+README.md
+FLOW.md

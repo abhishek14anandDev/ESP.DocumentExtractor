@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:7071/api";
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "";
 const DEFAULT_CENTER = { lat: 52.049, lng: -0.712 };
+const CAD_VIEW_MAX_METERS = 900;
 
 const layerColors = new Map();
 
@@ -61,6 +62,7 @@ function App() {
   const [plotError, setPlotError] = useState("");
   const [selected, setSelected] = useState(null);
   const [geojson, setGeojson] = useState(null);
+  const [coordinateMode, setCoordinateMode] = useState("none");
   const [tooltip, setTooltip] = useState(null);
   const [lineWidth, setLineWidth] = useState(2);
   const [pointRadius, setPointRadius] = useState(3);
@@ -211,10 +213,13 @@ function App() {
         throw new Error("The API returned an invalid GeoJSON FeatureCollection.");
       }
 
-      setGeojson(payload);
+      const normalized = normalizeGeojsonForMap(payload);
+      setGeojson(normalized.geojson);
+      setCoordinateMode(normalized.mode);
       setPlotStatus("ready");
     } catch (error) {
       setGeojson(null);
+      setCoordinateMode("none");
       setPlotError(error.message);
       setPlotStatus("error");
     }
@@ -290,6 +295,7 @@ function App() {
           <strong>{selected?.fileName || "Choose a file to plot"}</strong>
           <span>{summary.featureCount.toLocaleString()} features</span>
           <span>{summary.layerCount.toLocaleString()} layers</span>
+          {coordinateMode === "cad" && <span>CAD view</span>}
           {plotStatus === "loading" && <span>Loading GeoJSON...</span>}
           {plotStatus === "error" && <span className="error-text">{plotError}</span>}
         </div>
@@ -364,6 +370,99 @@ function summarizeGeojson(data) {
     layerCount: layers.length,
     layers,
   };
+}
+
+function normalizeGeojsonForMap(data) {
+  const bounds = collectCoordinateBounds(data);
+  if (!bounds.count) {
+    return { geojson: data, mode: "none" };
+  }
+
+  if (isLikelyWgs84(bounds)) {
+    return { geojson: data, mode: "wgs84" };
+  }
+
+  const width = Math.max(bounds.maxX - bounds.minX, 1);
+  const height = Math.max(bounds.maxY - bounds.minY, 1);
+  const scale = CAD_VIEW_MAX_METERS / Math.max(width, height);
+  const sourceCenterX = (bounds.minX + bounds.maxX) / 2;
+  const sourceCenterY = (bounds.minY + bounds.maxY) / 2;
+  const metersPerLatDegree = 110_540;
+  const metersPerLngDegree = 111_320 * Math.cos((DEFAULT_CENTER.lat * Math.PI) / 180);
+
+  return {
+    mode: "cad",
+    geojson: mapGeojsonCoordinates(data, (x, y, rest) => {
+      const eastMeters = (x - sourceCenterX) * scale;
+      const northMeters = (y - sourceCenterY) * scale;
+      return [
+        DEFAULT_CENTER.lng + eastMeters / metersPerLngDegree,
+        DEFAULT_CENTER.lat + northMeters / metersPerLatDegree,
+        ...rest,
+      ];
+    }),
+  };
+}
+
+function isLikelyWgs84(bounds) {
+  return (
+    bounds.minX >= -180 &&
+    bounds.maxX <= 180 &&
+    bounds.minY >= -85 &&
+    bounds.maxY <= 85
+  );
+}
+
+function collectCoordinateBounds(data) {
+  const bounds = {
+    minX: Number.POSITIVE_INFINITY,
+    minY: Number.POSITIVE_INFINITY,
+    maxX: Number.NEGATIVE_INFINITY,
+    maxY: Number.NEGATIVE_INFINITY,
+    count: 0,
+  };
+
+  for (const feature of data?.features || []) {
+    visitCoordinates(feature.geometry?.coordinates, (x, y) => {
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return;
+      }
+      bounds.minX = Math.min(bounds.minX, x);
+      bounds.minY = Math.min(bounds.minY, y);
+      bounds.maxX = Math.max(bounds.maxX, x);
+      bounds.maxY = Math.max(bounds.maxY, y);
+      bounds.count += 1;
+    });
+  }
+
+  return bounds;
+}
+
+function mapGeojsonCoordinates(data, mapper) {
+  return {
+    ...data,
+    features: (data.features || []).map((feature) => ({
+      ...feature,
+      geometry: feature.geometry
+        ? {
+            ...feature.geometry,
+            coordinates: mapCoordinates(feature.geometry.coordinates, mapper),
+          }
+        : feature.geometry,
+    })),
+  };
+}
+
+function mapCoordinates(value, mapper) {
+  if (!Array.isArray(value)) {
+    return value;
+  }
+
+  if (typeof value[0] === "number" && typeof value[1] === "number") {
+    return mapper(value[0], value[1], value.slice(2));
+  }
+
+  return value.map((child) => mapCoordinates(child, mapper));
 }
 
 function visitCoordinates(value, visitor) {
