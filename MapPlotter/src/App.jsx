@@ -2,7 +2,7 @@ import { GoogleMapsOverlay } from "@deck.gl/google-maps";
 import { GeoJsonLayer } from "@deck.gl/layers";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:7071/api";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "";
 const DEFAULT_CENTER = { lat: 52.049, lng: -0.712 };
 const CAD_VIEW_MAX_METERS = 900;
