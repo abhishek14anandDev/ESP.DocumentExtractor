@@ -246,30 +246,67 @@ Read response headers include `x-correlation-id`, `x-cosmos-conversion-id`,
 
 ## Deployment notes
 
-The Azure Functions Linux Python host does **not** include LibreDWG. To process
-`.dwg` files in the cloud, either:
+The Azure Functions Linux Python host does **not** include LibreDWG, so `.dwg`
+processing should be deployed as a **custom Linux container**.
 
-1. Deploy in a **custom container** (recommended) with LibreDWG installed:
+### Container image
 
-```dockerfile
-FROM mcr.microsoft.com/azure-functions/python:4-python3.11
-RUN apt-get update && apt-get install -y libredwg0 libredwg-tools && rm -rf /var/lib/apt/lists/*
-COPY requirements.txt /
-RUN pip install -r /requirements.txt
-COPY . /home/site/wwwroot
-ENV AzureWebJobsScriptRoot=/home/site/wwwroot AzureFunctionsJobHost__Logging__Console__IsEnabled=true
-```
+`Dockerfile` builds from `mcr.microsoft.com/azure-functions/python:4-python3.11`,
+installs:
 
-2. Or restrict the deployed function to `.dxf` input (no external binary needed).
+- `libredwg0`
+- `libredwg-tools`
 
-3. Add the Cosmos settings as Function App configuration values. The connection
-   string must not be stored in source control.
+and then installs `requirements.txt`, copies the function project into
+`/home/site/wwwroot`, and sets the Azure Functions runtime environment values
+required by the container host.
 
-GitHub Actions deploys this Python function app to `pydataextractor` when changes
-under `ESP.DocumentExtractor.Python` are pushed to `main`.
-The workflow uses Kudu/Oryx remote build so native wheels such as NumPy are
-installed for the Function App's Linux Python runtime instead of being packaged
-from the GitHub runner.
+### GitHub Actions workflow
+
+`.github/workflows/build-push-python-function-container.yml` runs on pushes to
+`main` that touch `ESP.DocumentExtractor.Python/**` (or the workflow itself) and
+on manual dispatch. It:
+
+1. runs the Python unit tests;
+2. builds the container from `ESP.DocumentExtractor.Python/Dockerfile`;
+3. pushes these tags to Azure Container Registry:
+   - `espdocumentextractoracr.azurecr.io/dwg-geojson-function:latest`
+   - `espdocumentextractoracr.azurecr.io/dwg-geojson-function:<sha>`
+
+Add these GitHub repository secrets before running the workflow:
+
+- `ACR_USERNAME`
+- `ACR_PASSWORD`
+
+To retrieve Azure Container Registry credentials:
+
+- **Azure Portal:** `espdocumentextractoracr` → **Access keys** → copy the
+  username and one password.
+- **Azure CLI:**
+
+  ```bash
+  az acr credential show --name espdocumentextractoracr \
+    --query "{username: username, passwords: passwords[].value}"
+  ```
+
+### Function App configuration
+
+Configure the Azure Function App as a **Linux custom container** pointing to
+`espdocumentextractoracr.azurecr.io/dwg-geojson-function:latest` (or a specific
+SHA tag for a pinned release).
+
+Set these Function App application settings:
+
+- `AzureWebJobsStorage`
+- `FUNCTIONS_WORKER_RUNTIME=python`
+- `COSMOS_CONNECTION_STRING`
+- `COSMOS_DATABASE_NAME=esp-document-extractor`
+- `COSMOS_CONTAINER_NAME=cad-geojson`
+
+The previous package-based workflow remains in
+`.github/workflows/deploy-function-app.yml` as a **manual-only legacy option**.
+Do not use it for production `.dwg` deployments because Oryx/package deploy does
+not provision the LibreDWG system binaries required by this project.
 
 ## Project layout
 
