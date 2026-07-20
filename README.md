@@ -19,11 +19,26 @@ dotnet test ESP.DocumentExtractor.sln --configuration Release
 
 GitHub Actions workflow:
 
-- [.github/workflows/deploy-function-app.yml](/Users/abhishekanand/RiderProjects/ESP.DocumentExtractor/.github/workflows/deploy-function-app.yml)
+- `.github/workflows/build-push-python-function-container.yml` builds and pushes the
+  Python Azure Function container image to
+  `espdocumentextractoracr.azurecr.io/dwg-geojson-function`.
+- `.github/workflows/deploy-function-app.yml` is a **manual-only legacy package
+  deploy** workflow and should not be used for `.dwg` production deployments.
 
-Repository secret required:
+Repository secrets required for the container workflow:
 
-- `AZURE_FUNCTIONAPP_PUBLISH_PROFILE_PYDATAEXTRACTOR`
+- `ACR_USERNAME`
+- `ACR_PASSWORD`
 
-The workflow deploys the Python Function App `pydataextractor` on pushes to `main`
-when `ESP.DocumentExtractor.Python` changes, and on manual dispatch.
+Published image tags:
+
+- `espdocumentextractoracr.azurecr.io/dwg-geojson-function:latest`
+- `espdocumentextractoracr.azurecr.io/dwg-geojson-function:<sha>`
+
+Configure the Azure Function App as a Linux custom container and set:
+
+- `AzureWebJobsStorage`
+- `FUNCTIONS_WORKER_RUNTIME=python`
+- `COSMOS_CONNECTION_STRING`
+- `COSMOS_DATABASE_NAME=esp-document-extractor`
+- `COSMOS_CONTAINER_NAME=cad-geojson`
