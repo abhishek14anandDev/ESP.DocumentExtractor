@@ -17,7 +17,6 @@ env:
   APP_PACKAGE_PATH: MapPlotter
   DEPLOY_PACKAGE_PATH: mapplotter-package
   NODE_VERSION: "24.x"
-  VITE_API_BASE_URL: https://pydataextractor-cyb2a3htduguf5ge.canadacentral-01.azurewebsites.net/api
 
 jobs:
   build-deploy:
@@ -47,6 +46,7 @@ jobs:
       - name: Build MapPlotter
         working-directory: ${{ env.APP_PACKAGE_PATH }}
         env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
           VITE_GOOGLE_MAPS_API_KEY: ${{ secrets.MAPPLOTTER_GOOGLE_MAPS_API_KEY }}
         run: npm run build
 
