@@ -154,6 +154,13 @@ def list_cad_geojson(req: func.HttpRequest) -> func.HttpResponse:
         return _error(correlation_id, "cad.persistence_failed", str(exc), 500)
 
     logger.info("[%s] Cosmos metadata list completed: returned=%s", correlation_id, len(items))
+    logger.info(
+        "[%s] CAD GeoJSON payload not logged for metadata list endpoint: "
+        "returned=%s reason=list endpoint returns metadata only; "
+        "use POST /api/cad/geojson or GET /api/cad/geojson/{conversion_id}",
+        correlation_id,
+        len(items),
+    )
     return func.HttpResponse(
         body=json.dumps(items),
         status_code=200,
