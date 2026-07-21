@@ -6,6 +6,15 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "";
 const DEFAULT_CENTER = { lat: 52.049, lng: -0.712 };
 const CAD_VIEW_MAX_METERS = 900;
+const ANNOTATION_CATEGORIES = [
+  "primary-substation",
+  "cable-route-segment",
+  "road-footway-crossing",
+  "directional-drilling",
+  "utility-service-route",
+  "commercial-boundary",
+  "custom",
+];
 
 const layerColors = new Map();
 
@@ -67,6 +76,14 @@ function App() {
   const [lineWidth, setLineWidth] = useState(2);
   const [pointRadius, setPointRadius] = useState(3);
   const [opacity, setOpacity] = useState(0.9);
+  const [analysis, setAnalysis] = useState(null);
+  const [analysisText, setAnalysisText] = useState("");
+  const [analysisStatus, setAnalysisStatus] = useState("idle");
+  const [analysisError, setAnalysisError] = useState("");
+  const [annotationCategory, setAnnotationCategory] = useState("primary-substation");
+  const [annotationTitle, setAnnotationTitle] = useState("");
+  const [annotationNotes, setAnnotationNotes] = useState("");
+  const [pinMode, setPinMode] = useState(false);
 
   const loadConversions = useCallback(async () => {
     setListStatus("loading");
@@ -163,11 +180,27 @@ function App() {
               getPointRadius: pointRadius,
             },
           }),
+          new GeoJsonLayer({
+            id: "curated-drawing-annotations",
+            data: annotationFeatureCollection(analysis?.annotations),
+            pickable: true,
+            stroked: true,
+            filled: true,
+            pointType: "circle",
+            getLineColor: [175, 55, 35, 255],
+            getFillColor: [175, 55, 35, 100],
+            getPointColor: [175, 55, 35, 255],
+            getLineWidth: 5,
+            lineWidthUnits: "pixels",
+            getPointRadius: 8,
+            pointRadiusUnits: "pixels",
+            onHover: (info) => setTooltip(toTooltip(info)),
+          }),
         ]
       : [];
 
     overlayRef.current.setProps({ layers });
-  }, [geojson, lineWidth, opacity, pointRadius]);
+  }, [analysis?.annotations, geojson, lineWidth, opacity, pointRadius]);
 
   useEffect(() => {
     refreshLayer();
@@ -196,6 +229,37 @@ function App() {
     fitToData();
   }, [fitToData]);
 
+  useEffect(() => {
+    if (!mapRef.current || !window.google?.maps || !pinMode) {
+      return undefined;
+    }
+    const listener = mapRef.current.addListener("click", (event) => {
+      if (!isPointCategory(annotationCategory)) {
+        setAnalysisError("Use the JSON editor for route or boundary geometry. Click-to-pin supports point categories.");
+        return;
+      }
+      if (!annotationTitle.trim()) {
+        setAnalysisError("Enter an annotation title before selecting a map location.");
+        return;
+      }
+      const item = {
+        id: crypto.randomUUID?.() || `annotation-${Date.now()}`,
+        category: annotationCategory,
+        title: annotationTitle.trim(),
+        notes: annotationNotes.trim(),
+        geometry: { type: "Point", coordinates: [event.latLng.lng(), event.latLng.lat()] },
+      };
+      const next = { ...(analysis || emptyAnalysis()), annotations: [...(analysis?.annotations || []), item] };
+      setAnalysis(next);
+      setAnalysisText(JSON.stringify(next, null, 2));
+      setPinMode(false);
+      setAnnotationTitle("");
+      setAnnotationNotes("");
+      setAnalysisError("");
+    });
+    return () => listener.remove();
+  }, [analysis, annotationCategory, annotationNotes, annotationTitle, pinMode]);
+
   const plotConversion = async (conversion) => {
     setSelected(conversion);
     setPlotStatus("loading");
@@ -203,25 +267,60 @@ function App() {
     setTooltip(null);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/cad/geojson/${conversion.conversionId}?format=geojson`);
+      const response = await fetch(`${API_BASE_URL}/cad/geojson/${conversion.conversionId}`);
       if (!response.ok) {
         throw new Error(await readError(response));
       }
 
       const payload = await response.json();
-      if (payload?.type !== "FeatureCollection" || !Array.isArray(payload.features)) {
+      if (payload?.geojson?.type !== "FeatureCollection" || !Array.isArray(payload.geojson.features)) {
         throw new Error("The API returned an invalid GeoJSON FeatureCollection.");
       }
 
-      const normalized = normalizeGeojsonForMap(payload);
+      const normalized = normalizeGeojsonForMap(payload.geojson);
       setGeojson(normalized.geojson);
       setCoordinateMode(normalized.mode);
+      const nextAnalysis = payload.analysis || emptyAnalysis();
+      setAnalysis(nextAnalysis);
+      setAnalysisText(JSON.stringify(nextAnalysis, null, 2));
+      setAnalysisStatus("idle");
+      setAnalysisError("");
       setPlotStatus("ready");
     } catch (error) {
       setGeojson(null);
       setCoordinateMode("none");
+      setAnalysis(null);
+      setAnalysisText("");
       setPlotError(error.message);
       setPlotStatus("error");
+    }
+  };
+
+  const saveAnalysis = async () => {
+    if (!selected) return;
+    let payload;
+    try {
+      payload = JSON.parse(analysisText || "{}");
+    } catch {
+      setAnalysisError("Analysis must be valid JSON before it can be saved.");
+      return;
+    }
+    setAnalysisStatus("saving");
+    setAnalysisError("");
+    try {
+      const response = await fetch(`${API_BASE_URL}/cad/geojson/${selected.conversionId}/analysis`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) throw new Error(await readError(response));
+      const saved = await response.json();
+      setAnalysis(saved);
+      setAnalysisText(JSON.stringify(saved, null, 2));
+      setAnalysisStatus("saved");
+    } catch (error) {
+      setAnalysisError(error.message);
+      setAnalysisStatus("error");
     }
   };
 
@@ -278,6 +377,47 @@ function App() {
             Fit to data
           </button>
         </section>
+
+        {selected && (
+          <section className="analysis-editor">
+            <h2>Drawing content & annotations</h2>
+            <p>Curated facts and annotations are saved separately from the original CAD GeoJSON.</p>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => {
+                const template = suppliedHvAsLaidTemplate();
+                setAnalysis(template);
+                setAnalysisText(JSON.stringify(template, null, 2));
+                setAnalysisError("");
+              }}
+            >
+              Load HV As Laid template
+            </button>
+            <div className="pin-form">
+              <select value={annotationCategory} onChange={(event) => setAnnotationCategory(event.target.value)}>
+                {ANNOTATION_CATEGORIES.map((category) => <option key={category} value={category}>{labelForCategory(category)}</option>)}
+              </select>
+              <input value={annotationTitle} onChange={(event) => setAnnotationTitle(event.target.value)} placeholder="Pin title" />
+              <input value={annotationNotes} onChange={(event) => setAnnotationNotes(event.target.value)} placeholder="Notes (optional)" />
+              <button type="button" className="secondary-button" onClick={() => setPinMode(!pinMode)}>
+                {pinMode ? "Cancel pin" : "Place point pin"}
+              </button>
+            </div>
+            {pinMode && <div className="message">Click a map location to place the selected pin.</div>}
+            <textarea
+              aria-label="Curated drawing analysis JSON"
+              value={analysisText}
+              onChange={(event) => setAnalysisText(event.target.value)}
+              spellCheck="false"
+            />
+            <button type="button" onClick={saveAnalysis} disabled={analysisStatus === "saving"}>
+              {analysisStatus === "saving" ? "Saving…" : "Save drawing content"}
+            </button>
+            {analysisStatus === "saved" && <div className="message success">Drawing content saved.</div>}
+            {analysisError && <div className="message error">{analysisError}</div>}
+          </section>
+        )}
       </aside>
 
       <section className="map-region">
@@ -295,6 +435,7 @@ function App() {
           <strong>{selected?.fileName || "Choose a file to plot"}</strong>
           <span>{summary.featureCount.toLocaleString()} features</span>
           <span>{summary.layerCount.toLocaleString()} layers</span>
+          <span>{analysis?.annotations?.length || 0} annotations</span>
           {coordinateMode === "cad" && <span>CAD view</span>}
           {plotStatus === "loading" && <span>Loading GeoJSON...</span>}
           {plotStatus === "error" && <span className="error-text">{plotError}</span>}
@@ -354,6 +495,88 @@ async function readError(response) {
   } catch {
     return `${response.status} ${response.statusText}`;
   }
+}
+
+function emptyAnalysis() {
+  return {
+    drawing: {
+      number: "",
+      revision: "",
+      title: "",
+      author: "",
+      format: "",
+      savedUsing: "",
+    },
+    routeSummary: "",
+    cableLengths: [],
+    layouts: [],
+    cadBlocks: [],
+    caveats: [],
+    annotations: [],
+  };
+}
+
+function suppliedHvAsLaidTemplate() {
+  return {
+    drawing: {
+      number: "P2122392-041",
+      revision: "Rev 4",
+      title: "HV As Laid",
+      format: "AutoCAD 2018–2020",
+      savedUsing: "AutoCAD LT 2023",
+      author: "Nikita Wells",
+    },
+    routeSummary: "Multi-sheet high-voltage electrical cable route drawing. Includes an overall site/general arrangement, the as-laid HV mains alignment, detailed road/junction/development sections, a proposed/new primary substation and Proposed Primary Substation – Option 2, service routes, crossings, directional drilling, ducted/direct-laid arrangements, auxiliary/fibre routes and commercial boundary mapping.",
+    cableLengths: [
+      { label: "Earlier/original total cable length", metres: 10404 },
+      { label: "Revised total cable length after mains added", metres: 17106 },
+      { label: "Referenced quantity (context requires verification)", quantity: "2 × 4,710 metres" },
+    ],
+    layouts: ["Sheet 1", "Sheet 2", "Sheet 6"],
+    cadBlocks: [
+      "Combined services arrangements",
+      "Electrical, gas and water services",
+      "200A HDCO GF95 riser",
+      "400A HDCO GF185 riser",
+      "Three-phase metering board",
+      "Gas ECV and GRP cabinet arrangements",
+      "Vertical, horizontal and flanged service inlet details",
+      "General Arrangement",
+      "Advanced Road Crossings",
+      "Legal Plan",
+      "PRI location",
+    ],
+    caveats: [
+      "This is a user-curated record based on a low-resolution drawing inspection.",
+      "Individual symbol quantities, smaller labels and exact coordinates require high-resolution PDF/DXF or CAD verification.",
+      "Stored CAD blocks/details may be reusable definitions and may not be physically placed on the HV route.",
+    ],
+    annotations: [],
+  };
+}
+
+function annotationFeatureCollection(annotations) {
+  return {
+    type: "FeatureCollection",
+    features: (annotations || []).filter((item) => item?.geometry).map((item) => ({
+      type: "Feature",
+      geometry: item.geometry,
+      properties: {
+        entityType: labelForCategory(item.category),
+        layer: "Curated drawing annotation",
+        text: item.notes,
+        annotationId: item.id,
+      },
+    })),
+  };
+}
+
+function isPointCategory(category) {
+  return !["cable-route-segment", "utility-service-route", "commercial-boundary"].includes(category);
+}
+
+function labelForCategory(category) {
+  return String(category || "custom").replaceAll("-", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function summarizeGeojson(data) {

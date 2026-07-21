@@ -21,6 +21,7 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 import azure.functions as func
@@ -33,7 +34,7 @@ from dwg_geojson import (
 from dwg_geojson.cosmos_repository import CosmosGeoJsonRepository
 from dwg_geojson.repository import PersistenceError, StoredGeoJsonNotFoundError
 from dwg_geojson.retrieval_service import GeoJsonRetrievalService
-from dwg_geojson.storage_models import SourceInfo
+from dwg_geojson.storage_models import DocumentAnalysis, SourceInfo, validate_annotation
 from dwg_geojson.storage_service import GeoJsonStorageService
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
@@ -225,6 +226,64 @@ def get_cad_geojson(req: func.HttpRequest) -> func.HttpResponse:
     )
 
 
+@app.route(route="cad/geojson/{conversion_id}/analysis", methods=["GET"])
+def get_document_analysis(req: func.HttpRequest) -> func.HttpResponse:
+    correlation_id = req.headers.get("x-correlation-id") or uuid.uuid4().hex
+    conversion_id = (req.route_params.get("conversion_id") or "").strip()
+    try:
+        _require_conversion(conversion_id)
+        analysis = _get_repository().get_analysis(conversion_id)
+    except ValueError as exc:
+        return _error(correlation_id, "request.invalid", str(exc), 400)
+    except StoredGeoJsonNotFoundError as exc:
+        return _error(correlation_id, "cad.not_found", str(exc), 404)
+    except PersistenceError as exc:
+        logger.exception("[%s] Analysis retrieval failed", correlation_id)
+        return _error(correlation_id, "cad.persistence_failed", str(exc), 500)
+
+    return func.HttpResponse(
+        body=json.dumps(analysis),
+        status_code=200,
+        mimetype="application/json",
+        headers=_cors_headers(correlation_id),
+    )
+
+
+@app.route(route="cad/geojson/{conversion_id}/analysis", methods=["PUT"])
+def put_document_analysis(req: func.HttpRequest) -> func.HttpResponse:
+    correlation_id = req.headers.get("x-correlation-id") or uuid.uuid4().hex
+    conversion_id = (req.route_params.get("conversion_id") or "").strip()
+    try:
+        _require_conversion(conversion_id)
+        try:
+            payload = req.get_json()
+        except ValueError as exc:
+            raise ValueError("Request body must be a JSON document analysis.") from exc
+        existing = _get_repository().get_analysis(conversion_id)
+        analysis = _analysis_from_payload(conversion_id, payload, existing)
+        _get_repository().upsert_analysis(analysis)
+    except ValueError as exc:
+        return _error(correlation_id, "request.invalid", str(exc), 400)
+    except StoredGeoJsonNotFoundError as exc:
+        return _error(correlation_id, "cad.not_found", str(exc), 404)
+    except PersistenceError as exc:
+        logger.exception("[%s] Analysis persistence failed", correlation_id)
+        return _error(correlation_id, "cad.persistence_failed", str(exc), 500)
+
+    return func.HttpResponse(
+        body=json.dumps(analysis.to_item()),
+        status_code=200,
+        mimetype="application/json",
+        headers=_cors_headers(correlation_id),
+    )
+
+
+@app.route(route="cad/geojson/{conversion_id}/analysis", methods=["OPTIONS"])
+def document_analysis_options(req: func.HttpRequest) -> func.HttpResponse:
+    correlation_id = req.headers.get("x-correlation-id") or uuid.uuid4().hex
+    return func.HttpResponse(status_code=204, headers=_cors_headers(correlation_id))
+
+
 def _get_repository() -> CosmosGeoJsonRepository:
     global _geojson_repository
     if _geojson_repository is None:
@@ -252,6 +311,67 @@ def _get_retrieval_service() -> GeoJsonRetrievalService:
         logger.info("Creating GeoJsonRetrievalService")
         _retrieval_service = GeoJsonRetrievalService(_get_repository())
     return _retrieval_service
+
+
+def _require_conversion(conversion_id: str) -> None:
+    if not conversion_id:
+        raise ValueError("conversion_id is required.")
+    if _get_repository().get_metadata(conversion_id) is None:
+        raise StoredGeoJsonNotFoundError(f"GeoJSON conversion '{conversion_id}' was not found.")
+
+
+def _analysis_from_payload(
+    conversion_id: str,
+    payload: Any,
+    existing: dict[str, Any] | None,
+) -> DocumentAnalysis:
+    if not isinstance(payload, dict):
+        raise ValueError("Document analysis must be a JSON object.")
+
+    now = datetime.now(timezone.utc).isoformat()
+    drawing = payload.get("drawing", {})
+    if not isinstance(drawing, dict):
+        raise ValueError("'drawing' must be an object.")
+    cable_lengths = _object_list(payload.get("cableLengths", []), "cableLengths")
+    annotations = []
+    for annotation in _object_list(payload.get("annotations", []), "annotations"):
+        normalized = validate_annotation(annotation)
+        normalized["id"] = normalized["id"] or uuid.uuid4().hex
+        normalized["createdUtc"] = normalized["createdUtc"] or now
+        normalized["updatedUtc"] = now
+        annotations.append(normalized)
+
+    return DocumentAnalysis(
+        conversion_id=conversion_id,
+        created_utc=(existing or {}).get("createdUtc") or now,
+        updated_utc=now,
+        drawing={str(key): value for key, value in drawing.items()},
+        route_summary=_limited_text(payload.get("routeSummary"), "routeSummary", 10_000),
+        cable_lengths=cable_lengths,
+        layouts=_text_list(payload.get("layouts", []), "layouts"),
+        cad_blocks=_text_list(payload.get("cadBlocks", []), "cadBlocks"),
+        caveats=_text_list(payload.get("caveats", []), "caveats"),
+        annotations=annotations,
+    )
+
+
+def _object_list(value: Any, name: str) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise ValueError(f"'{name}' must be an array of objects.")
+    return value
+
+
+def _text_list(value: Any, name: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"'{name}' must be an array.")
+    return [_limited_text(item, name, 1_000) for item in value if str(item).strip()]
+
+
+def _limited_text(value: Any, name: str, maximum: int) -> str:
+    text = str(value or "").strip()
+    if len(text) > maximum:
+        raise ValueError(f"'{name}' cannot exceed {maximum} characters.")
+    return text
 
 
 def _log_geojson_payload(
@@ -468,5 +588,7 @@ def _cors_headers(correlation_id: str) -> dict[str, str]:
     return {
         "x-correlation-id": correlation_id,
         "access-control-allow-origin": "*",
+        "access-control-allow-methods": "GET, POST, PUT, OPTIONS",
+        "access-control-allow-headers": "content-type, x-correlation-id",
         "access-control-expose-headers": "x-correlation-id",
     }

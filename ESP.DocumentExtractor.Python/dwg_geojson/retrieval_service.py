@@ -80,6 +80,7 @@ class GeoJsonRetrievalService:
         return {
             "conversionId": conversion_id,
             "metadata": metadata,
+            "analysis": self._repository.get_analysis(conversion_id),
             "geojson": {
                 "type": "FeatureCollection",
                 "features": features,

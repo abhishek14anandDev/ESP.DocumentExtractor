@@ -7,7 +7,7 @@ import os
 from typing import Any
 
 from .repository import PersistenceError
-from .storage_models import GeoJsonChunk, StoredGeoJsonMetadata
+from .storage_models import DocumentAnalysis, GeoJsonChunk, StoredGeoJsonMetadata
 
 
 DEFAULT_DATABASE_NAME = "esp-document-extractor"
@@ -151,6 +151,27 @@ class CosmosGeoJsonRepository:
         except Exception as exc:  # noqa: BLE001 - SDK exceptions vary by version.
             logger.exception("Cosmos DB chunk read failed: conversionId=%s", conversion_id)
             raise PersistenceError(f"Cosmos DB chunk read failed: {exc}") from exc
+
+    def get_analysis(self, conversion_id: str) -> dict | None:
+        self.ensure_ready()
+        try:
+            return self._container.read_item(
+                item=f"{conversion_id}:analysis",
+                partition_key=conversion_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - SDK exceptions vary by version.
+            if _is_not_found(exc):
+                return None
+            logger.exception("Cosmos DB analysis read failed: conversionId=%s", conversion_id)
+            raise PersistenceError(f"Cosmos DB analysis read failed: {exc}") from exc
+
+    def upsert_analysis(self, analysis: DocumentAnalysis) -> None:
+        logger.info(
+            "Upserting Cosmos document analysis: conversionId=%s annotations=%s",
+            analysis.conversion_id,
+            len(analysis.annotations),
+        )
+        self._upsert(analysis.to_item())
 
     def list_metadata(self, limit: int) -> list[dict]:
         self.ensure_ready()

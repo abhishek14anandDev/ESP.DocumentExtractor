@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from .storage_models import GeoJsonChunk, StoredGeoJsonMetadata
+from .storage_models import DocumentAnalysis, GeoJsonChunk, StoredGeoJsonMetadata
 
 
 class PersistenceError(Exception):
@@ -39,3 +39,9 @@ class GeoJsonRepository(Protocol):
 
     def list_metadata(self, limit: int) -> list[dict]:
         """Return recent conversion metadata items."""
+
+    def get_analysis(self, conversion_id: str) -> dict | None:
+        """Return the curated analysis for a conversion when available."""
+
+    def upsert_analysis(self, analysis: DocumentAnalysis) -> None:
+        """Persist curated facts and annotations for a conversion."""

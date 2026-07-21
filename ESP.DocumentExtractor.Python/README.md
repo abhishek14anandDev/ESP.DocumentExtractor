@@ -244,6 +244,31 @@ curl "http://localhost:7071/api/cad/geojson/<conversion-id>?format=geojson" -o o
 Read response headers include `x-correlation-id`, `x-cosmos-conversion-id`,
 `x-cosmos-container`, `x-cosmos-chunk-count`, and `x-conversion-feature-count`.
 
+### Curated drawing analysis and map annotations
+
+Each conversion can also have one compact `documentAnalysis` item in the same
+Cosmos `/conversionId` partition. It stores user-curated drawing facts and map
+annotations separately from the immutable, chunked conversion output.
+
+```text
+GET /api/cad/geojson/<conversion-id>/analysis
+PUT /api/cad/geojson/<conversion-id>/analysis
+```
+
+`PUT` replaces the curated analysis. Its payload supports `drawing`,
+`routeSummary`, `cableLengths`, `layouts`, `cadBlocks`, `caveats`, and
+`annotations`. An annotation requires a `category`, `title`, and GeoJSON
+`geometry`. Point categories are `primary-substation`, `road-footway-crossing`,
+`directional-drilling`, and `custom`; route categories require a `LineString`;
+and `commercial-boundary` accepts a `LineString` or `Polygon`.
+
+The normal conversion envelope includes `analysis` when present. The
+`?format=geojson` response deliberately remains raw GeoJSON only.
+
+> The current HTTP endpoints are anonymous to match the existing conversion
+> API. Do not expose the application publicly until write operations are
+> protected with an authentication and authorization strategy.
+
 ## Deployment notes
 
 The Azure Functions Linux Python host does **not** include LibreDWG, so `.dwg`

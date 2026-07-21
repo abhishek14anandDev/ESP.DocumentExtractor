@@ -20,6 +20,7 @@ class FakeRepository:
         self.metadata = None
         self.metadata_items = []
         self.chunks = []
+        self.analysis = None
 
     def ensure_ready(self) -> None:
         self.ready = True
@@ -48,6 +49,14 @@ class FakeRepository:
             metadata.to_item()
             for metadata in self.metadata_items[:limit]
         ]
+
+    def get_analysis(self, conversion_id: str):
+        if self.analysis is None or self.analysis.conversion_id != conversion_id:
+            return None
+        return self.analysis.to_item()
+
+    def upsert_analysis(self, analysis) -> None:
+        self.analysis = analysis
 
 
 class FailingRepository(FakeRepository):
@@ -153,6 +162,7 @@ class GeoJsonRetrievalServiceTests(unittest.TestCase):
 
         self.assertEqual(result["conversionId"], "conversion-4")
         self.assertEqual(result["metadata"]["documentType"], "conversionMetadata")
+        self.assertIsNone(result["analysis"])
         self.assertEqual(result["geojson"]["features"], features)
 
     def test_get_missing_conversion_returns_not_found(self) -> None:
@@ -345,6 +355,75 @@ class FunctionAppPersistenceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(body["error"], "cad.not_found")
 
+    def test_put_and_get_document_analysis(self) -> None:
+        repo = FakeRepository()
+        GeoJsonStorageService(repo).store(
+            conversion_id="conversion-analysis",
+            correlation_id="correlation-analysis",
+            geojson={"type": "FeatureCollection", "features": [_feature()]},
+            stats=_stats(1),
+            source=SourceInfo(source_type="test", file_name="drawing.dwg"),
+            request_options={},
+        )
+        function_app._geojson_repository = repo
+        payload = {
+            "drawing": {"number": "P2122392-041", "title": "HV As Laid"},
+            "routeSummary": "Proposed primary substation cable route.",
+            "cableLengths": [{"label": "Revised total", "metres": 17106}],
+            "layouts": ["Sheet 1"],
+            "cadBlocks": ["General Arrangement"],
+            "caveats": ["Curated from drawing review."],
+            "annotations": [
+                {
+                    "category": "primary-substation",
+                    "title": "Proposed Primary Substation",
+                    "geometry": {"type": "Point", "coordinates": [-0.71, 52.05]},
+                }
+            ],
+        }
+        request = _FakeRequest(
+            route_params={"conversion_id": "conversion-analysis"},
+            json_body=payload,
+        )
+
+        put_response = function_app.put_document_analysis(request)
+        get_response = function_app.get_document_analysis(request)
+
+        self.assertEqual(put_response.status_code, 200)
+        self.assertEqual(get_response.status_code, 200)
+        analysis = json.loads(get_response.get_body())
+        self.assertEqual(analysis["drawing"]["number"], "P2122392-041")
+        self.assertEqual(analysis["annotations"][0]["category"], "primary-substation")
+
+    def test_put_analysis_rejects_invalid_annotation_geometry(self) -> None:
+        repo = FakeRepository()
+        GeoJsonStorageService(repo).store(
+            conversion_id="conversion-invalid-analysis",
+            correlation_id="correlation-invalid-analysis",
+            geojson={"type": "FeatureCollection", "features": [_feature()]},
+            stats=_stats(1),
+            source=SourceInfo(source_type="test", file_name="drawing.dwg"),
+            request_options={},
+        )
+        function_app._geojson_repository = repo
+        response = function_app.put_document_analysis(
+            _FakeRequest(
+                route_params={"conversion_id": "conversion-invalid-analysis"},
+                json_body={
+                    "annotations": [
+                        {
+                            "category": "primary-substation",
+                            "title": "Invalid area",
+                            "geometry": {"type": "Polygon", "coordinates": []},
+                        }
+                    ]
+                },
+            )
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(json.loads(response.get_body())["error"], "request.invalid")
+
     def test_list_returns_compact_metadata_from_cosmos(self) -> None:
         repo = FakeRepository()
         storage = GeoJsonStorageService(repo)
@@ -386,10 +465,16 @@ class FunctionAppPersistenceTests(unittest.TestCase):
 
 
 class _FakeRequest:
-    def __init__(self, headers=None, params=None, route_params=None) -> None:
+    def __init__(self, headers=None, params=None, route_params=None, json_body=None) -> None:
         self.headers = headers or {}
         self.params = params or {}
         self.route_params = route_params or {}
+        self._json_body = json_body
+
+    def get_json(self):
+        if self._json_body is None:
+            raise ValueError("No JSON body")
+        return self._json_body
 
 
 def _replace_created_utc(metadata, created_utc: str):
