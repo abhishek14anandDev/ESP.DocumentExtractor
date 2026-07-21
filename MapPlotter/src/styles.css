@@ -19,7 +19,9 @@ body,
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
 }
 
@@ -112,10 +114,11 @@ button:disabled {
 
 .conversion-list {
   display: flex;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   flex-direction: column;
   gap: 10px;
-  min-height: 0;
+  min-height: 120px;
+  max-height: 34vh;
   overflow: auto;
   padding: 16px 20px;
 }
@@ -172,6 +175,55 @@ button:disabled {
   gap: 14px;
   padding: 16px 20px 20px;
   border-top: 1px solid #e3e7ed;
+}
+
+.analysis-editor {
+  display: grid;
+  gap: 10px;
+  padding: 16px 20px 20px;
+  border-top: 1px solid #e3e7ed;
+  overflow: auto;
+}
+
+.analysis-editor h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.analysis-editor > p {
+  margin: 0;
+  color: #607087;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.pin-form {
+  display: grid;
+  gap: 8px;
+}
+
+.pin-form input,
+.pin-form select,
+.analysis-editor textarea {
+  width: 100%;
+  border: 1px solid #cbd4df;
+  border-radius: 6px;
+  padding: 8px;
+  color: #18212f;
+  background: #fff;
+}
+
+.analysis-editor textarea {
+  min-height: 240px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.success {
+  background: #e8f7ef;
+  color: #176b5b;
 }
 
 .control-slider {
