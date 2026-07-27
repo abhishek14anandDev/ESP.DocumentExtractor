@@ -49,6 +49,25 @@ class AssetClassifierTests(unittest.TestCase):
 
         self.assertEqual({"pole-cabinet": 1}, counts)
 
+    def test_adjacent_sub_and_sta_text_fragments_create_substation_marker(self) -> None:
+        collection = {
+            "type": "FeatureCollection",
+            "features": [
+                _feature(text="Sub"),
+                {
+                    **_feature(text="Sta"),
+                    "geometry": {"type": "Point", "coordinates": [102.0, 200.0]},
+                },
+            ],
+        }
+
+        counts = classify_geojson_assets(collection)
+
+        self.assertEqual({"substation": 1}, counts)
+        marker = collection["features"][2]
+        self.assertEqual("Sub Sta", marker["properties"]["asset"]["evidence"])
+        self.assertEqual("textFragments", marker["properties"]["asset"]["detectionSource"])
+
     def test_unknown_rule_category_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unsupported asset type"):
             validate_asset_rules({"unknown": ["value"]})

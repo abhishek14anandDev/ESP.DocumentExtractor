@@ -107,6 +107,10 @@ def classify_geojson_assets(
         )
         counts[asset_type] += 1
 
+    fragment_markers, fragment_counts = _classify_substation_text_fragments(features)
+    markers.extend(fragment_markers)
+    counts.update(fragment_counts)
+
     features.extend(markers)
     return dict(counts)
 
@@ -143,6 +147,95 @@ def _representative_coordinate(value: Any) -> list[float] | None:
             if coordinate is not None:
                 return coordinate
     return None
+
+
+def _classify_substation_text_fragments(
+    features: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], Counter[str]]:
+    """Detect adjacent CAD text fragments such as ``Sub`` + ``Sta``.
+
+    The supplied as-laid drawing renders several substations as separate text
+    objects, rather than a single ``Substation`` entity. Those labels are close
+    together in model-space, so join only complementary abbreviations within a
+    conservative distance. This intentionally remains low confidence because
+    it is inferred from label fragments rather than an explicit block or layer.
+    """
+    fragments: list[tuple[dict[str, Any], list[float], str]] = []
+    for feature in features:
+        properties = feature.get("properties")
+        if not isinstance(properties, dict) or properties.get("asset"):
+            continue
+        text = _normalized_fragment(properties.get("text"))
+        coordinate = _representative_coordinate((feature.get("geometry") or {}).get("coordinates"))
+        if text in {"sub", "sta"} and coordinate is not None:
+            fragments.append((feature, coordinate, text))
+
+    markers: list[dict[str, Any]] = []
+    counts: Counter[str] = Counter()
+    threshold = _fragment_distance_threshold([coordinate for _, coordinate, _ in fragments])
+    paired_ids: set[int] = set()
+    for left_index, (left, left_coordinate, left_text) in enumerate(fragments):
+        if id(left) in paired_ids:
+            continue
+        for right, right_coordinate, right_text in fragments[left_index + 1 :]:
+            if id(right) in paired_ids or left_text == right_text:
+                continue
+            if _distance(left_coordinate, right_coordinate) > threshold:
+                continue
+
+            coordinate = [
+                round((left_coordinate[0] + right_coordinate[0]) / 2, 8),
+                round((left_coordinate[1] + right_coordinate[1]) / 2, 8),
+            ]
+            left_props = left["properties"]
+            right_props = right["properties"]
+            asset_id = _asset_id(
+                left_index,
+                {"handle": f"{left_props.get('handle', '')}|{right_props.get('handle', '')}"},
+                "substation",
+                coordinate,
+            )
+            asset = {
+                "id": asset_id,
+                "type": "substation",
+                "confidence": "low",
+                "detectionSource": "textFragments",
+                "evidence": "Sub Sta",
+                "isMarker": False,
+            }
+            left_props["asset"] = asset
+            right_props["asset"] = asset
+            markers.append(
+                {
+                    "type": "Feature",
+                    "geometry": {"type": "Point", "coordinates": coordinate},
+                    "properties": {
+                        "entityType": "DETECTED_ASSET",
+                        "layer": "Detected CAD assets",
+                        "asset": {**asset, "isMarker": True},
+                        "sourceCadHandles": [left_props.get("handle"), right_props.get("handle")],
+                        "sourceCadLayers": [left_props.get("layer"), right_props.get("layer")],
+                    },
+                }
+            )
+            paired_ids.update({id(left), id(right)})
+            counts["substation"] += 1
+            break
+    return markers, counts
+
+
+def _normalized_fragment(value: Any) -> str:
+    return re.sub(r"[^a-z]", "", str(value or "").lower())
+
+
+def _fragment_distance_threshold(coordinates: list[list[float]]) -> float:
+    if coordinates and all(-180 <= point[0] <= 180 and -90 <= point[1] <= 90 for point in coordinates):
+        return 0.0001
+    return 10.0
+
+
+def _distance(left: list[float], right: list[float]) -> float:
+    return ((left[0] - right[0]) ** 2 + (left[1] - right[1]) ** 2) ** 0.5
 
 
 def _asset_id(index: int, properties: dict[str, Any], asset_type: str, coordinate: list[float]) -> str:
