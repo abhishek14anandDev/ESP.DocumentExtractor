@@ -306,6 +306,11 @@ button:disabled {
   font-size: 12px;
 }
 
+.asset-legend {
+  top: auto;
+  bottom: 20px;
+}
+
 .legend div {
   display: grid;
   grid-template-columns: 14px minmax(0, 1fr) auto;

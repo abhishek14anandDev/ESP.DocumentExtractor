@@ -117,6 +117,7 @@ class StoredGeoJsonMetadata:
     request_options: dict[str, Any] = field(default_factory=dict)
     entity_counts: dict[str, int] = field(default_factory=dict)
     skipped: dict[str, int] = field(default_factory=dict)
+    asset_counts: dict[str, int] = field(default_factory=dict)
 
     @property
     def id(self) -> str:
@@ -141,6 +142,7 @@ class StoredGeoJsonMetadata:
             "requestOptions": self.request_options,
             "entityCounts": self.entity_counts,
             "skipped": self.skipped,
+            "assetCounts": self.asset_counts,
         }
 
 

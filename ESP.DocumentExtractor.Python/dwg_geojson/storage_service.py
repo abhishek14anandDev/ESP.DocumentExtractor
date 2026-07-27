@@ -105,6 +105,7 @@ class GeoJsonStorageService:
             request_options=request_options,
             entity_counts=stats.entity_counts,
             skipped=stats.skipped,
+            asset_counts=stats.asset_counts,
         )
 
         self._repository.ensure_ready()

@@ -33,6 +33,8 @@ import ezdxf
 from ezdxf.document import Drawing
 from ezdxf.entities import DXFEntity
 
+from .asset_classifier import classify_geojson_assets
+
 logger = logging.getLogger(__name__)
 
 # Number of straight segments used to approximate a full circle.
@@ -94,6 +96,7 @@ class ConversionStats:
     source_epsg: int | None = None
     reprojected: bool = False
     filtered_out: int = 0
+    asset_counts: dict[str, int] = field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------- #
@@ -135,6 +138,10 @@ def _normalize_native_feature(feature: dict[str, Any]) -> dict[str, Any]:
         props["color"] = raw["Color"]
     if raw.get("Text"):
         props["text"] = raw["Text"]
+    for key in ("BlockName", "Block", "BlockHeader"):
+        if raw.get(key):
+            props["blockName"] = raw[key]
+            break
 
     geometry = feature.get("geometry")
     if geometry and "coordinates" in geometry:
@@ -303,6 +310,9 @@ def _geometry_for_entity(entity: DXFEntity) -> dict[str, Any] | None:
     if dxftype == "POINT":
         return {"type": "Point", "coordinates": _pt(entity.dxf.location)}
 
+    if dxftype == "INSERT":
+        return {"type": "Point", "coordinates": _pt(entity.dxf.insert)}
+
     if dxftype == "CIRCLE":
         ring = _circle_points(entity.dxf.center, float(entity.dxf.radius))
         return {"type": "Polygon", "coordinates": [ring]}
@@ -345,6 +355,8 @@ def _properties_for_entity(entity: DXFEntity) -> dict[str, Any]:
         text = getattr(dxf, "text", None)
         if text:
             props["text"] = text
+    if entity.dxftype() == "INSERT" and dxf.hasattr("name"):
+        props["blockName"] = dxf.name
     color = dxf.get("color", None)
     if color is not None:
         props["color"] = color
@@ -540,6 +552,7 @@ def convert_file_to_geojson(
     reproject_to_wgs84: bool = False,
     filter_to_source_bbox: bool = False,
     cluster_radius_m: float | None = _DEFAULT_CLUSTER_RADIUS_M,
+    asset_rules: dict[str, tuple[str, ...]] | None = None,
 ) -> tuple[dict[str, Any], ConversionStats]:
     """Path to a .dwg/.dxf file -> (GeoJSON dict, stats).
 
@@ -558,6 +571,7 @@ def convert_file_to_geojson(
     bbox = _BNG_BBOX if filter_to_source_bbox else None
     with tempfile.TemporaryDirectory(prefix="dwg2geojson_") as work_dir:
         geojson, stats = _convert_path(file_path, work_dir)
+    stats.asset_counts = classify_geojson_assets(geojson, asset_rules)
     return _postprocess(
         geojson, stats,
         source_epsg=source_epsg,
@@ -575,6 +589,7 @@ def convert_bytes_to_geojson(
     reproject_to_wgs84: bool = False,
     filter_to_source_bbox: bool = False,
     cluster_radius_m: float | None = _DEFAULT_CLUSTER_RADIUS_M,
+    asset_rules: dict[str, tuple[str, ...]] | None = None,
 ) -> tuple[dict[str, Any], ConversionStats]:
     """Convert in-memory file bytes (e.g. an uploaded file) to GeoJSON."""
     ext = os.path.splitext(file_name)[1].lower() or ".dwg"
@@ -584,6 +599,7 @@ def convert_bytes_to_geojson(
         with open(src_path, "wb") as handle:
             handle.write(data)
         geojson, stats = _convert_path(src_path, work_dir)
+    stats.asset_counts = classify_geojson_assets(geojson, asset_rules)
     return _postprocess(
         geojson, stats,
         source_epsg=source_epsg,

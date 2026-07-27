@@ -6,7 +6,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "";
 const DEFAULT_CENTER = { lat: 52.049, lng: -0.712 };
 const CAD_VIEW_MAX_METERS = 900;
-const ANNOTATION_CATEGORIES = [
+ const ANNOTATION_CATEGORIES = [
   "primary-substation",
   "cable-route-segment",
   "road-footway-crossing",
@@ -161,7 +161,7 @@ function App() {
       ? [
           new GeoJsonLayer({
             id: "stored-cad-geojson",
-            data: geojson,
+            data: cadFeatureCollection(geojson),
             pickable: true,
             stroked: true,
             filled: true,
@@ -179,6 +179,19 @@ function App() {
               getLineWidth: lineWidth,
               getPointRadius: pointRadius,
             },
+          }),
+          new GeoJsonLayer({
+            id: "detected-cad-assets",
+            data: assetFeatureCollection(geojson),
+            pickable: true,
+            stroked: true,
+            filled: true,
+            pointType: "circle",
+            getLineColor: (feature) => [...assetColor(feature.properties?.asset?.type), 255],
+            getFillColor: (feature) => [...assetColor(feature.properties?.asset?.type), 190],
+            getPointRadius: 9,
+            pointRadiusUnits: "pixels",
+            onHover: (info) => setTooltip(toTooltip(info)),
           }),
           new GeoJsonLayer({
             id: "curated-drawing-annotations",
@@ -435,6 +448,7 @@ function App() {
           <strong>{selected?.fileName || "Choose a file to plot"}</strong>
           <span>{summary.featureCount.toLocaleString()} features</span>
           <span>{summary.layerCount.toLocaleString()} layers</span>
+          <span>{summary.assetCount.toLocaleString()} detected assets</span>
           <span>{analysis?.annotations?.length || 0} annotations</span>
           {coordinateMode === "cad" && <span>CAD view</span>}
           {plotStatus === "loading" && <span>Loading GeoJSON...</span>}
@@ -456,9 +470,27 @@ function App() {
           </div>
         )}
 
+        {summary.assets.length > 0 && (
+          <div className="legend asset-legend">
+            {summary.assets.map(([assetType, count]) => {
+              const [red, green, blue] = assetColor(assetType);
+              return (
+                <div key={assetType}>
+                  <span style={{ backgroundColor: `rgb(${red}, ${green}, ${blue})` }} />
+                  <p>{labelForCategory(assetType)}</p>
+                  <small>{count}</small>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {tooltip && (
           <div className="tooltip" style={{ left: tooltip.x + 14, top: tooltip.y + 14 }}>
             <strong>{tooltip.entityType}</strong>
+            {tooltip.assetType && <span>Asset: {labelForCategory(tooltip.assetType)}</span>}
+            {tooltip.assetConfidence && <span>Confidence: {tooltip.assetConfidence}</span>}
+            {tooltip.assetEvidence && <span>Matched: {tooltip.assetEvidence}</span>}
             <span>{tooltip.coordinates}</span>
             <span>Layer: {tooltip.layer}</span>
             {tooltip.text && <span>Text: {tooltip.text}</span>}
@@ -571,6 +603,31 @@ function annotationFeatureCollection(annotations) {
   };
 }
 
+function cadFeatureCollection(data) {
+  return {
+    ...data,
+    features: (data?.features || []).filter((feature) => !feature.properties?.asset?.isMarker),
+  };
+}
+
+function assetFeatureCollection(data) {
+  return {
+    type: "FeatureCollection",
+    features: (data?.features || []).filter((feature) => feature.properties?.asset?.isMarker),
+  };
+}
+
+function assetColor(assetType) {
+  const colors = {
+    substation: [180, 42, 42],
+    station: [214, 126, 20],
+    "cable-route": [24, 104, 178],
+    "joint-termination": [117, 67, 173],
+    "pole-cabinet": [41, 123, 83],
+  };
+  return colors[assetType] || [82, 95, 110];
+}
+
 function isPointCategory(category) {
   return !["cable-route-segment", "utility-service-route", "commercial-boundary"].includes(category);
 }
@@ -580,8 +637,15 @@ function labelForCategory(category) {
 }
 
 function summarizeGeojson(data) {
-  const features = data?.features || [];
+  const features = (data?.features || []).filter((feature) => !feature.properties?.asset?.isMarker);
   const counts = new Map();
+  const assetCounts = new Map();
+  for (const feature of data?.features || []) {
+    const asset = feature.properties?.asset;
+    if (asset?.isMarker) {
+      assetCounts.set(asset.type, (assetCounts.get(asset.type) || 0) + 1);
+    }
+  }
   for (const feature of features) {
     const layer = feature.properties?.layer || "(none)";
     counts.set(layer, (counts.get(layer) || 0) + 1);
@@ -592,6 +656,8 @@ function summarizeGeojson(data) {
     featureCount: features.length,
     layerCount: layers.length,
     layers,
+    assetCount: [...assetCounts.values()].reduce((total, count) => total + count, 0),
+    assets: [...assetCounts.entries()].sort((left, right) => left[0].localeCompare(right[0])),
   };
 }
 
@@ -721,6 +787,9 @@ function toTooltip(info) {
     layer: properties.layer || "-",
     text: properties.text,
     handle: properties.handle,
+    assetType: properties.asset?.type,
+    assetConfidence: properties.asset?.confidence,
+    assetEvidence: properties.asset?.evidence,
   };
 }
 
