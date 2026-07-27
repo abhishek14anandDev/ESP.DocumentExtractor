@@ -30,6 +30,15 @@ npm run dev
 The app reads conversion metadata from `GET /api/cad/geojson` and loads a selected
 conversion envelope from `GET /api/cad/geojson/{conversionId}`.
 
+## Detected CAD assets
+
+Conversions can contain generated point markers for detected `Substation`,
+`Station`, `Cable route`, `Joint / termination`, and `Pole / cabinet` assets.
+They render above the original CAD geometry in category-specific colors. Hover a
+marker to see its category, confidence, matched CAD evidence, coordinates, and
+source metadata. Low-confidence markers originate from text-only matching and
+should be reviewed against the drawing.
+
 ## Curated drawing content and map pins
 
 After plotting a drawing, the sidebar contains a JSON editor for curated drawing

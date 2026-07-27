@@ -25,6 +25,32 @@ Each CAD entity becomes a GeoJSON `Feature`:
 Properties are normalized to `entityType`, `layer`, `handle`, `color` (and
 `text` where available). Coordinates are rounded to 6 decimals.
 
+### Detected stations and other assets
+
+During conversion the API detects `substation`, `station`, `cable-route`,
+`joint-termination`, and `pole-cabinet` assets from CAD layer names, text, and
+block names. Each match creates an additional point feature with an `asset`
+property. `substation` takes precedence over `station`; text-only matches are
+low-confidence candidates for review.
+
+```json
+{
+  "entityType": "DETECTED_ASSET",
+  "asset": {
+    "id": "asset-...",
+    "type": "substation",
+    "confidence": "high|medium|low",
+    "detectionSource": "blockName|layer|text",
+    "evidence": "Proposed Primary Substation",
+    "isMarker": true
+  }
+}
+```
+
+The original CAD feature is retained and linked to the same asset id.
+MapPlotter renders generated markers and shows their type, confidence, and
+matched evidence on hover.
+
 > Note: DWG/DXF coordinates are in the drawing's own units, not WGS84
 > longitude/latitude. The output is valid GeoJSON geometry but is not
 > geo-referenced unless the source drawing already uses real-world coordinates.
@@ -153,6 +179,20 @@ curl -X POST http://localhost:7071/api/cad/geojson \
   --data-binary @/path/to/drawing.dwg \
   -o output.geojson
 ```
+
+To refine classification for a drawing family in Postman, supply an optional
+multipart text field named `assetRules` containing JSON, for example:
+
+```json
+{
+  "substation": ["PRIMARY SUBSTATION", "PRI"],
+  "pole-cabinet": ["FEEDER PILLAR"]
+}
+```
+
+Use the same JSON in the `x-asset-rules` header for raw-binary uploads, or in
+the `assetRules` property for JSON file-path uploads. Effective rules and asset
+counts are persisted with the conversion.
 
 **Option 3 — local file path (JSON), for files on the host:**
 

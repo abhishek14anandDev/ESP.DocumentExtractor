@@ -31,6 +31,7 @@ from dwg_geojson import (
     convert_bytes_to_geojson,
     convert_file_to_geojson,
 )
+from dwg_geojson.asset_classifier import validate_asset_rules
 from dwg_geojson.cosmos_repository import CosmosGeoJsonRepository
 from dwg_geojson.repository import PersistenceError, StoredGeoJsonNotFoundError
 from dwg_geojson.retrieval_service import GeoJsonRetrievalService
@@ -445,6 +446,15 @@ def _geo_options(req: func.HttpRequest) -> dict:
     }
 
 
+def _asset_options(value: Any) -> dict[str, Any]:
+    """Return validated semantic asset rules and the audit-safe request value."""
+    rules = validate_asset_rules(value)
+    return {
+        "asset_rules": rules,
+        "assetRules": {asset_type: list(keywords) for asset_type, keywords in rules.items()},
+    }
+
+
 def _convert_request(req: func.HttpRequest) -> ConvertedRequest:
     """Dispatch on content type and return converted GeoJSON plus source metadata."""
     content_type = (req.headers.get("content-type") or "").lower()
@@ -460,7 +470,16 @@ def _convert_request(req: func.HttpRequest) -> ConvertedRequest:
         data = uploaded.stream.read()
         if not data:
             raise ValueError("Uploaded file is empty.")
-        geojson, stats = convert_bytes_to_geojson(data, file_name, **options)
+        try:
+            asset_rules_value = req.form.get("assetRules")
+            if asset_rules_value:
+                asset_rules_value = json.loads(asset_rules_value)
+        except json.JSONDecodeError as exc:
+            raise ValueError("Multipart field 'assetRules' must contain a JSON object.") from exc
+        asset_options = _asset_options(asset_rules_value)
+        geojson, stats = convert_bytes_to_geojson(
+            data, file_name, **options, asset_rules=asset_options["asset_rules"]
+        )
         return ConvertedRequest(
             geojson=geojson,
             stats=stats,
@@ -471,7 +490,7 @@ def _convert_request(req: func.HttpRequest) -> ConvertedRequest:
                 content_type=content_type,
                 source_hash=_sha256_bytes(data),
             ),
-            request_options=options,
+            request_options={**options, "assetRules": asset_options["assetRules"]},
         )
 
     # Raw binary body (e.g. application/octet-stream) with file name in a header.
@@ -480,7 +499,14 @@ def _convert_request(req: func.HttpRequest) -> ConvertedRequest:
         if not data:
             raise ValueError("Request body is empty.")
         file_name = req.headers.get("x-file-name", "input.dwg")
-        geojson, stats = convert_bytes_to_geojson(data, file_name, **options)
+        asset_rules_header = req.headers.get("x-asset-rules")
+        try:
+            asset_options = _asset_options(json.loads(asset_rules_header) if asset_rules_header else None)
+        except json.JSONDecodeError as exc:
+            raise ValueError("Header 'x-asset-rules' must contain a JSON object.") from exc
+        geojson, stats = convert_bytes_to_geojson(
+            data, file_name, **options, asset_rules=asset_options["asset_rules"]
+        )
         return ConvertedRequest(
             geojson=geojson,
             stats=stats,
@@ -491,7 +517,7 @@ def _convert_request(req: func.HttpRequest) -> ConvertedRequest:
                 content_type=content_type,
                 source_hash=_sha256_bytes(data),
             ),
-            request_options=options,
+            request_options={**options, "assetRules": asset_options["assetRules"]},
         )
 
     # Default: JSON body with a local file path.
@@ -505,7 +531,10 @@ def _convert_request(req: func.HttpRequest) -> ConvertedRequest:
         raise ValueError(
             "Provide multipart form-data with a 'file' field, or JSON with a 'filePath' value."
         )
-    geojson, stats = convert_file_to_geojson(file_path, **options)
+    asset_options = _asset_options(body.get("assetRules"))
+    geojson, stats = convert_file_to_geojson(
+        file_path, **options, asset_rules=asset_options["asset_rules"]
+    )
     return ConvertedRequest(
         geojson=geojson,
         stats=stats,
@@ -518,7 +547,7 @@ def _convert_request(req: func.HttpRequest) -> ConvertedRequest:
             content_type=content_type,
             source_hash=_sha256_file(file_path),
         ),
-        request_options=options,
+        request_options={**options, "assetRules": asset_options["assetRules"]},
     )
 
 
